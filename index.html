@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Food Score</title>
+<meta name="description" content="Scan food: health score 0-100, eczema check, ingredient ratings">
+<meta name="theme-color" content="#1e9e4a">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Food Score">
+<link rel="stylesheet" href="css/app.css">
+<script src="version.js"></script>
+</head>
+<body>
+<header class="top">
+  <h1 id="appTitle">Food Score</h1>
+  <button id="langBtn" class="lang" type="button" aria-label="Language">EN</button>
+</header>
+
+<div id="updateBar" class="update-bar" hidden><button id="updateBtn" type="button"></button></div>
+
+<main id="home" class="view">
+  <button id="scanBtn" class="big primary" type="button"><span class="ico">▦</span><span data-t="scan"></span></button>
+  <label class="big secondary" id="photoLabel">
+    <span class="ico">📷</span><span data-t="photo"></span>
+    <input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
+  </label>
+  <form id="typeForm" class="type-form" autocomplete="off">
+    <input id="codeInput" inputmode="numeric" pattern="[0-9 ]*" maxlength="16" data-ph="typePh">
+    <button type="submit" class="go" data-t="go"></button>
+  </form>
+  <div id="installBox" class="install" hidden>
+    <button id="installBtn" type="button" class="install-btn" data-t="install" hidden></button>
+    <p id="iosTip" class="tip" hidden></p>
+  </div>
+  <section class="history">
+    <div class="history-head"><h2 data-t="history"></h2><button id="clearHist" type="button" class="link" data-t="clear"></button></div>
+    <ul id="histList"></ul>
+  </section>
+</main>
+
+<main id="result" class="view" hidden></main>
+
+<div id="busy" class="busy" hidden><div class="spinner"></div><p id="busyText"></p></div>
+
+<div id="scanner" class="scanner" hidden>
+  <video id="video" playsinline muted autoplay></video>
+  <div class="frame"><div class="laser"></div></div>
+  <p class="scan-hint" data-t="scanHint"></p>
+  <div class="scan-bar">
+    <button id="torchBtn" type="button" class="round" hidden aria-label="torch">🔦</button>
+    <button id="closeScan" type="button" class="round" aria-label="close">✕</button>
+  </div>
+  <p id="scanEngine" class="scan-engine"></p>
+</div>
+
+<button id="scanNext" class="scan-next" type="button" hidden></button>
+
+<footer class="foot"><span id="buildStamp"></span> · <span data-t="dataCredit"></span></footer>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
