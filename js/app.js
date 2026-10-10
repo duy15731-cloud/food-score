@@ -35,6 +35,8 @@ function applyLang() {
   renderHistory();
   if (current) renderCurrent();
   if (!$('ranking').hidden) renderRanking();
+  if (!$('allergies').hidden) renderAllergies();
+  renderAlgHome();
 }
 document.querySelectorAll('.lang-opt').forEach((b) => {
   b.onclick = () => {
@@ -61,16 +63,18 @@ window.addEventListener('popstate', () => {
   if (!$('scanner').hidden && s !== 'camera') stopScanner();
   if (!s) showHome();
   else if (s === 'ranking') showRanking();
+  else if (s === 'allergies') showAllergies();
   else if (s === 'result' && current) showResultView();
 });
 function showHome() {
   current = null;
-  $('result').hidden = true; $('ranking').hidden = true; $('home').hidden = false; $('scanNext').hidden = true;
+  $('result').hidden = true; $('ranking').hidden = true; $('allergies').hidden = true; $('home').hidden = false; $('scanNext').hidden = true;
   renderHistory();
   window.scrollTo(0, 0);
 }
 function showResultView() {
-  $('home').hidden = true; $('ranking').hidden = true; $('result').hidden = false; $('scanNext').hidden = false;
+  if (!$('allergies').hidden && current) { $('allergies').hidden = true; renderCurrent(); }   // the profile may have changed
+  $('home').hidden = true; $('ranking').hidden = true; $('allergies').hidden = true; $('result').hidden = false; $('scanNext').hidden = false;
   window.scrollTo(0, 0);
 }
 // busy overlay: text is kept as a string KEY so a language switch mid-way re-translates it
@@ -144,13 +148,22 @@ function histAdd(item) {
     }
   }
 }
-const histEntry = (a, extra) => ({ score: a.score, ecs: a.eczemaScore ? a.eczemaScore.score : null, type: a.type || 'food', ecz: a.eczema.overall, ...extra });
+const histEntry = (a, extra) => ({ score: a.score, ecs: a.eczemaScore ? a.eczemaScore.score : null, type: a.type || 'food', ecz: a.eczema.overall,
+  alg: a.allergens ? E.allergenSummary(a.allergens) : null, ...extra });
+// ⚠️ chip in a list row: red = one of MY allergens is in it, amber = may contain / can't confirm
+function algChip(x) {
+  const prof = algGet();
+  if (!prof.length || !x.alg) return '';
+  if (x.alg.c.some((id) => prof.includes(id))) return `<span class="alg-chip red" title="${h(t('algRed'))}">⚠️</span>`;
+  if (x.alg.t.some((id) => prof.includes(id)) || x.alg.u) return `<span class="alg-chip amber" title="${h(t('algAmber'))}">⚠</span>`;
+  return '';
+}
 const TYPE_ICON = { food: '🍎', cosmetic: '🧴', household: '🧽' };
 const mini = (v, title) => `<span class="mini" title="${h(title)}" style="background:${v == null ? '#9aa0a6' : E.bandFor(v).color}">${v == null ? '<span class="mini-n">?</span>' : `<span class="mini-n">${v}</span><span class="mini-of">/100</span>`}</span>`;
 function histRow(x, i) {
   return `<li><button type="button" class="hist-item" data-i="${i}">
     <span class="hist-type">${TYPE_ICON[x.type || 'food']}</span>
-    <span class="hist-name">${h(x.name || x.code)}</span>
+    <span class="hist-name">${h(x.name || x.code)}</span>${algChip(x)}
     <span class="mini-pair"><span class="mini-lab">${h(t((x.type || 'food') === 'food' ? 'scoreHealthShort' : 'scoreHarmShort'))}</span>${mini(x.score, t('scoreHealth'))}
     <span class="mini-lab">${h(t('scoreEczemaShort'))}</span>${mini(x.ecs, t('scoreEczema'))}</span>
   </button></li>`;
@@ -168,7 +181,7 @@ $('clearHist').onclick = () => { localStorage.removeItem('fs_hist'); renderHisto
 const rk = { q: '', filter: 'all', sort: 'score', dir: 'best' };
 function showRanking() {
   current = null;
-  $('home').hidden = true; $('result').hidden = true; $('ranking').hidden = false; $('scanNext').hidden = true;
+  $('home').hidden = true; $('result').hidden = true; $('allergies').hidden = true; $('ranking').hidden = false; $('scanNext').hidden = true;
   renderRanking();
   window.scrollTo(0, 0);
 }
@@ -236,14 +249,16 @@ const productName = (p) => p.product_name_vi && lang === 'vi' ? p.product_name_v
 // ------------------------------------------------------------------ rendering
 function renderCurrent() {
   const c = current;
-  const back = `<button type="button" class="link back" id="backBtn">${h(t(c.push ? 'camBack' : 'back'))}</button>`;
+  const hasA = (c.kind === 'off' || (c.kind === 'photo' && c.outcome !== 'unreadable')) && c.analysis;
+  const back = `<div class="res-top"><button type="button" class="link back" id="backBtn">${h(t(c.push ? 'camBack' : 'back'))}</button>
+    <button type="button" class="link gear" id="algGear">${h(t('algGear'))}</button></div>` + (hasA ? allergyBanner(c.analysis) : '');
   let html = '';
   if (c.kind === 'off') html = back + (c.fromPhoto ? renderPhotoBg(c.fromPhoto) : '') + renderAnalysis(c.analysis, { product: c.product, code: c.code, db: c.db });
   else if (c.kind === 'photo' && c.outcome === 'unreadable') html = back + renderUnreadable(c);
   else if (c.kind === 'photo') html = back + renderAnalysis(c.analysis, { photo: c });
   else if (c.kind === 'notfound') {
     html = back + `<section class="card msg" id="notFoundCard"><h2>${h(t('notFound'))}</h2><p>${h(t('notFoundHelp'))}</p>
-      <label class="big primary">📷 ${h(t('photoIngredients'))}<input type="file" accept="image/*" capture="environment" hidden class="photo-again"></label>
+      ${photoActions()}
       <p class="muted small">${h(t('barcode'))}: ${h(c.code)} · ${h(t('tried'))}: ${h(c.tried.join(', '))}</p></section>`;
   } else if (c.kind === 'failed') {
     html = back + `<section class="card msg warn"><h2>${h(t('failed'))}</h2>
@@ -251,11 +266,94 @@ function renderCurrent() {
   }
   $('result').innerHTML = html;
   $('backBtn').onclick = goHome;
+  $('algGear').onclick = openAllergies;
+  const ab = $('algBannerEdit'); if (ab) ab.onclick = openAllergies;
+  // buzz once when one of MY allergens is in a newly shown product
+  if (hasA && !c.buzzed && E.allergyReport(c.analysis.allergens, algGet()).status === 'red') { c.buzzed = true; if (navigator.vibrate) navigator.vibrate([250, 120, 250]); window.__algBuzz = (window.__algBuzz || 0) + 1; }
   const see = $('seePhotoRead'); if (see) see.onclick = () => showPhotoResult(c.fromPhoto.read.text, c.fromPhoto.read.meta);
   const rb = $('retryBtn'); if (rb) rb.onclick = () => openBarcode(c.code, c.format);
   $('result').querySelectorAll('.photo-again').forEach((inp) => { inp.onchange = () => inp.files[0] && onPhoto(inp.files[0]); });
+  $('result').querySelectorAll('.open-photo-cam').forEach((b) => { b.onclick = () => startScanner({ photo: true, push: true }); });
   const sb = $('sortBtn'); if (sb) sb.onclick = () => { sortWorst = !sortWorst; renderCurrent(); };
 }
+
+// "take a photo" from a result screen: the IN-APP camera (photo mode, no barcode auto-scan) + a gallery picker.
+// Never <input capture>: on Android that hands over to the phone's camera app and the photo often never comes back.
+const photoActions = (id = '', key = 'photoIngredients') => `<button type="button" class="big primary open-photo-cam"${id ? ` id="${id}"` : ''}>📷 ${h(t(key))}</button>
+  <label class="gallery-link">🖼 ${h(t('gallery'))}<input type="file" accept="image/*" hidden class="photo-again"></label>`;
+// ------------------------------------------------------------------ MY ALLERGIES (profile on this phone only)
+const ALG_KEY = 'fs_allergies';
+function algGet() { try { const v = JSON.parse(localStorage.getItem(ALG_KEY) || '[]'); return Array.isArray(v) ? v.filter((id) => E.ALLERGEN_BY_ID[id]) : []; } catch { return []; } }
+function algSet(ids) { localStorage.setItem(ALG_KEY, JSON.stringify([...new Set(ids)])); }
+function renderAlgHome() {
+  const n = algGet().length;
+  $('algBtn').textContent = n ? t('algHomeN', { n }) : t('algHomeNone');
+  $('algBtn').classList.toggle('set', n > 0);
+}
+const algItem = (x) => `${h(L(x.name))}${x.tagOnly ? '' : ` <span class="alg-what">(${x.matched.slice(0, 3).map(h).join(', ')})</span>`}`;
+// The banner at the very top of every result. Never says "safe": "none found" always points to the package.
+function allergyBanner(a) {
+  const r = E.allergyReport(a.allergens, algGet());
+  window.__allergyReport = r;
+  if (r.status === 'off') return '';
+  let out = `<section class="alg-banner ${r.status}" id="algBanner">`;
+  if (r.red.length) {
+    out += `<div class="alg-title">${h(t('algRed'))} ${r.red.filter((x) => !x.tagOnly).map(algItem).join(', ') || r.red.map((x) => h(L(x.name))).join(', ')}</div>`;
+    const notes = r.red.filter((x) => x.tagOnly || x.sources.includes('contains')).map((x) =>
+      `<li><b>${h(L(x.name))}</b> — ${h(t(x.tagOnly ? 'algTagOnly' : 'algFromContains'))}</li>`);
+    if (notes.length) out += `<ul class="alg-notes">${notes.join('')}</ul>`;
+  }
+  if (r.amber.length) {
+    out += `<div class="alg-sub amber">${h(t('algAmber'))} ${r.amber.map((x) => (x.sources.includes('maybe') && x.maybeWhy
+      ? `${h(L(x.name))} <span class="alg-what">(${h(L(x.maybeWhy))})</span>` : `${h(L(x.name))} <span class="alg-what">(${h(t('algTraces'))})</span>`)).join(', ')}</div>`;
+  }
+  if (r.unknown) out += `<div class="alg-sub amber" id="algUnknown">${h(t('algUnknown'))}</div>`;
+  if (r.status === 'none') out += `<div class="alg-title">${h(t('algNone'))}</div>`;
+  if (r.notes.length) out += `<ul class="alg-notes">${r.notes.map((x) => `<li><b>${h(L(x.name))}:</b> ${h(L(x.note))}</li>`).join('')}</ul>`;
+  out += `<button type="button" class="link alg-edit" id="algBannerEdit">${h(t('algGear'))}</button></section>`;
+  return out;
+}
+function openAllergies() { navTo('allergies', true); showAllergies(); }
+function showAllergies() {
+  $('home').hidden = true; $('result').hidden = true; $('ranking').hidden = true; $('allergies').hidden = false; $('scanNext').hidden = true;
+  renderAllergies();
+  window.scrollTo(0, 0);
+}
+let algQuery = '';
+function renderAllergies() {
+  const prof = algGet();
+  const group = (g, key) => `<h3 class="alg-group">${h(t(key))}</h3><ul class="alg-list">${E.ALLERGENS.filter((a) => a.group === g).map((a) => `
+    <li class="alg-row" data-id="${a.id}" data-q="${h([a.name.en, a.name.vi, ...a.words, ...a.cosmeticWords].join(' ').toLowerCase())}">
+      <label><input type="checkbox" class="alg-cb" value="${a.id}"${prof.includes(a.id) ? ' checked' : ''}>
+      <span class="alg-name">${h(L(a.name))}</span></label>
+      <div class="alg-syn muted small">${h(t('algAlso'))}: ${h(a.words.filter((w) => w !== a.name.en.toLowerCase()).slice(0, 6).join(', '))}</div>
+      ${a.note ? `<div class="alg-note small">${h(L(a.note))}</div>` : ''}</li>`).join('')}</ul>`;
+  $('allergies').innerHTML = `<button type="button" class="link back" id="algBack">${h(t('camBack'))}</button>
+    <h2 class="rk-title">⚠️ ${h(t('algTitle'))}</h2><p class="small">${h(t('algIntro'))}</p>
+    <input id="algSearch" class="rk-search" type="search" autocomplete="off" placeholder="${h(t('algSearchPh'))}" value="${h(algQuery)}">
+    <p class="muted small" id="algCount"></p>
+    ${group('food', 'algGroupFood')}${group('skin', 'algGroupSkin')}
+    <p class="muted small" id="algNoMatch" hidden>${h(t('algNoMatch'))}</p>
+    <p class="muted small">${h(t('algNotMedical'))}</p>
+    <button type="button" class="link" id="algClear">${h(t('algClearAll'))}</button>
+    <button type="button" class="big primary" id="algDone">${h(t('algDone'))}</button>`;
+  const count = () => { $('algCount').textContent = t('algCount', { n: algGet().length }); renderAlgHome(); };
+  const filter = () => {
+    const q = algQuery.trim().toLowerCase();
+    let shown = 0;
+    $('allergies').querySelectorAll('.alg-row').forEach((li) => { const on = !q || li.dataset.q.includes(q); li.hidden = !on; if (on) shown++; });
+    $('algNoMatch').hidden = shown > 0;
+  };
+  $('allergies').querySelectorAll('.alg-cb').forEach((cb) => {
+    cb.onchange = () => { const cur = algGet().filter((id) => id !== cb.value); algSet(cb.checked ? [...cur, cb.value] : cur); count(); };
+  });
+  $('algSearch').oninput = (e) => { algQuery = e.target.value; filter(); };
+  $('algBack').onclick = goHome;
+  $('algDone').onclick = goHome;
+  $('algClear').onclick = () => { algSet([]); renderAllergies(); };
+  count(); filter();
+}
+$('algBtn').onclick = openAllergies;
 
 // 0->100 red-orange-lightgreen-green gauge with a marker at the score, end labels + "Higher = better"
 function scaleBar(score, lowKey, highKey) {
@@ -334,8 +432,7 @@ function renderNonFood(a, { product, code, photo, db }) {
   if (photo) out += `<div class="banner warn">${h(t('photoWarn'))}</div>`;
   out += `<div class="score-row">${scoreCircles(a)}</div>`;
   if (a.score == null) {
-    out += `<div class="banner info" id="noIngMsg">${h(t('nfNoIngredients'))}</div>
-      <label class="big primary">📷 ${h(t('photoIngredients'))}<input type="file" accept="image/*" capture="environment" hidden class="photo-again"></label>`;
+    out += `<div class="banner info" id="noIngMsg">${h(t('nfNoIngredients'))}</div>${photoActions()}`;
   }
   out += `<ul class="reasons">${a.reasons.map((r) => `<li class="r-${r.kind}">${h(L(r))}</li>`).join('')}</ul>`;
   out += `<details class="breakdown"><summary>${h(t('breakdown'))}</summary><p class="small">${h(t('harmRule'))}</p></details></section>`;
@@ -368,7 +465,7 @@ function renderPhotoBg(fp) {
 function renderUnreadable(c) {
   return `<section class="card msg warn" id="ocrFail"><h2>${h(t('ocrNothing'))}</h2>
     <ul class="tips"><li>${h(t('ocrTip1'))}</li><li>${h(t('ocrTip2'))}</li><li>${h(t('ocrTip3'))}</li><li>${h(t('ocrTip4'))}</li></ul>
-    <label class="big primary" id="photoRetry">${h(t('tryAgainPhoto'))}<input type="file" accept="image/*" capture="environment" hidden class="photo-again"></label>
+    ${photoActions('photoRetry', 'tryAgainPhoto')}
     <p class="muted small">${h(t('ocrRawRead'))}</p><pre class="ocr">${c.text && c.text.trim() ? h(c.text) : h(t('ocrRawNone'))}</pre></section>`;
 }
 
@@ -621,7 +718,7 @@ function showPhotoResult(text, meta = {}) {
 $('photoInput').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) onPhoto(f); };
 
 // ------------------------------------------------------------------ live barcode scanner
-const scan = { stream: null, track: null, running: false, torch: false, detector: null, session: 0 };
+const scan = { stream: null, track: null, running: false, paused: false, torch: false, detector: null, session: 0, photoMode: false, hintTimer: 0, snap: null, snapUrl: '' };
 const ZX_FORMATS = ['EAN13', 'EAN8', 'UPCA', 'UPCE'];
 let zxReady = null;
 function loadZxing() {
@@ -670,15 +767,26 @@ function validScan(text, format) {
   if (f === 'upce' && code.length === 8) return !!E.expandUpcE(code) || E.checkDigitOk(code);
   return [8, 12, 13].includes(code.length) && E.checkDigitOk(code);
 }
-async function startScanner() {
+// ONE camera screen. Barcode mode (default): auto-detects UPC/EAN continuously, with a big "Photo of ingredients"
+// button that pulses after NO_BARCODE_MS. Photo mode (from a result screen): no auto-scan, just the photo button.
+// The photo is taken IN the app from the live stream (ImageCapture.takePhoto = full sensor resolution where the
+// browser has it, i.e. Android Chrome; else the current video frame), shown for "Use photo" / "Retake", then the
+// normal photo pipeline (barcode-in-photo + orientation search + OCR) runs on it.
+const NO_BARCODE_MS = 4000;
+async function startScanner(opts = {}) {
   if (!window.isSecureContext || !navigator.mediaDevices) { alert(t('camHttps')); return; }
   const session = ++scan.session;           // Back pressed while the camera is still starting -> this start is stale
   const stale = () => session !== scan.session || $('scanner').hidden;
+  scan.photoMode = !!opts.photo;
+  $('scanner').classList.toggle('photo-mode', scan.photoMode);
+  $('scanner').classList.remove('nobc');
+  $('snapPreview').hidden = true; $('snapBtn').disabled = false;
   $('scanner').hidden = false; $('scanEngine').textContent = t('camStarting');
-  navTo('camera');
+  navTo('camera', !!opts.push);
   let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
+    // high-res stream: the in-app photo needs it for OCR where takePhoto() is not available (iPhone)
+    stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 2560 }, height: { ideal: 1440 } } });
   } catch (err) {
     console.warn('camera', err);
     if (!stale()) { closeCamera(); alert(t('camError')); }
@@ -693,21 +801,24 @@ async function startScanner() {
   const caps = scan.track.getCapabilities ? scan.track.getCapabilities() : {};
   $('torchBtn').hidden = !caps.torch;
   if (caps.focusMode && caps.focusMode.includes('continuous')) scan.track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+  if (scan.photoMode) { $('scanEngine').textContent = ''; window.__scanEngine = 'photo'; return; }
   try { scan.detector = await getDetector(); } catch (err) { console.warn('detector', err); if (!stale()) { closeCamera(); alert(t('camError')); } return; }
   if (stale()) return;
   $('scanEngine').textContent = scan.detector.name;
   window.__scanEngine = scan.detector.name;
   scan.running = true;
+  clearTimeout(scan.hintTimer);
+  scan.hintTimer = setTimeout(() => { if (scan.running && session === scan.session) $('scanner').classList.add('nobc'); }, NO_BARCODE_MS);
   loop();
 }
 async function loop() {
   if (!scan.running) return;
   const video = $('video');
   try {
-    if (video.readyState >= 2) {
+    if (video.readyState >= 2 && !scan.paused) {
       const found = await scan.detector.detect(video);
       const hit = found.find((b) => validScan(b.text, b.format));
-      if (hit && scan.running) {
+      if (hit && scan.running && !scan.paused) {
         stopScanner();
         if (navigator.vibrate) navigator.vibrate(120);
         window.__lastScan = hit;
@@ -720,21 +831,97 @@ async function loop() {
 }
 function stopScanner() {
   scan.session++;
-  scan.running = false;
+  scan.running = false; scan.paused = false;
+  clearTimeout(scan.hintTimer);
   if (scan.stream) scan.stream.getTracks().forEach((tr) => tr.stop());
   scan.stream = null; scan.track = null; scan.torch = false;
+  $('torchBtn').classList.remove('on');
   $('video').srcObject = null;
   $('scanner').hidden = true;
+  $('snapPreview').hidden = true;
+  if (scan.snapUrl) { URL.revokeObjectURL(scan.snapUrl); scan.snapUrl = ''; }
+  scan.snap = null;
 }
 // close the camera the same way the phone's Back button does (stops every camera track, back to home)
 function closeCamera() {
   if (navState() === 'camera') history.back();   // popstate stops the scanner
   else stopScanner();
 }
-$('scanBtn').onclick = startScanner;
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
+// Take a still from the live camera. Returns { blob, how, w, h }.
+async function captureStill() {
+  const track = scan.track, video = $('video');
+  if ('ImageCapture' in window && track && track.readyState === 'live') {
+    try {
+      const ic = new window.ImageCapture(track);
+      const settings = {};
+      try {
+        const pc = await withTimeout(ic.getPhotoCapabilities(), 2000);
+        if (pc.imageWidth && pc.imageWidth.max) settings.imageWidth = pc.imageWidth.max;
+        if (pc.imageHeight && pc.imageHeight.max) settings.imageHeight = pc.imageHeight.max;
+      } catch { /* take the default size */ }
+      const blob = await withTimeout(ic.takePhoto(settings), 6000);
+      if (blob && blob.size > 0) {
+        const bmp = await createImageBitmap(blob);
+        const out = { blob, how: 'takePhoto', w: bmp.width, h: bmp.height };
+        if (bmp.close) bmp.close();
+        // some phones drop the torch after a photo: put it back
+        if (scan.torch && scan.track) scan.track.applyConstraints({ advanced: [{ torch: true }] }).catch(() => {});
+        return out;
+      }
+    } catch (err) { console.warn('takePhoto failed, using the video frame', err); }
+  }
+  const w = video.videoWidth, hgt = video.videoHeight;
+  if (!w || !hgt) throw new Error('no video frame');
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = hgt;
+  cv.getContext('2d').drawImage(video, 0, 0, w, hgt);
+  const blob = await new Promise((res, rej) => cv.toBlob((b) => (b ? res(b) : rej(new Error('toBlob'))), 'image/jpeg', 0.95));
+  return { blob, how: 'videoFrame', w, h: hgt };
+}
+async function snapPhoto() {
+  if (!scan.track || $('snapBtn').disabled) return;
+  const session = scan.session;
+  scan.paused = true;                             // no barcode auto-jump while the photo is being looked at
+  $('snapBtn').disabled = true;
+  $('scanEngine').textContent = t('snapTaking');
+  let shot;
+  try { shot = await captureStill(); } catch (err) {
+    console.warn('capture', err);
+    $('snapBtn').disabled = false; scan.paused = false;
+    if (session === scan.session) alert(t('snapFail'));
+    return;
+  }
+  if (session !== scan.session) return;          // camera closed meanwhile
+  window.__lastCapture = { how: shot.how, w: shot.w, h: shot.h, bytes: shot.blob.size };
+  scan.snap = shot.blob;
+  if (scan.snapUrl) URL.revokeObjectURL(scan.snapUrl);
+  scan.snapUrl = URL.createObjectURL(shot.blob);
+  $('snapImg').src = scan.snapUrl;
+  $('snapInfo').textContent = `${shot.w}×${shot.h}`;
+  $('scanEngine').textContent = scan.detector && !scan.photoMode ? scan.detector.name : '';
+  $('snapPreview').hidden = false;
+}
+function snapRetake() {
+  $('snapPreview').hidden = true; $('snapBtn').disabled = false;
+  if (scan.snapUrl) { URL.revokeObjectURL(scan.snapUrl); scan.snapUrl = ''; }
+  scan.snap = null; scan.paused = false;
+}
+function snapUse() {
+  const blob = scan.snap;
+  if (!blob) return;
+  scan.snap = null;
+  stopScanner();                                  // stops every track; the result screen replaces the camera history entry
+  onPhoto(blob);
+}
+$('scanBtn').onclick = () => startScanner();
 $('scanNext').onclick = () => { showHome(); startScanner(); };
 $('closeScan').onclick = closeCamera;
 $('scanBack').onclick = closeCamera;
+$('snapBtn').onclick = snapPhoto;
+$('snapRetake').onclick = snapRetake;
+$('snapUse').onclick = snapUse;
+$('scanGallery').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) { stopScanner(); onPhoto(f); } };
 $('torchBtn').onclick = async () => {
   if (!scan.track) return;
   scan.torch = !scan.torch;

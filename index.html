@@ -27,11 +27,12 @@
 <div id="updateBar" class="update-bar" hidden><button id="updateBtn" type="button"></button></div>
 
 <main id="home" class="view">
-  <button id="scanBtn" class="big primary" type="button"><span class="ico">▦</span><span data-t="scan"></span></button>
-  <label class="big secondary" id="photoLabel">
-    <span class="ico">📷</span><span data-t="photo"></span>
-    <input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
+  <button id="scanBtn" class="big primary scan-main" type="button"><span class="ico">▦</span><span class="scan-main-txt"><span data-t="scan"></span><small data-t="scanSub"></small></span></button>
+  <!-- existing photos only: NO capture attribute (on Android "capture" opens the phone's own camera app and the photo never comes back) -->
+  <label class="gallery-link" id="galleryLabel"><span>🖼</span> <span data-t="gallery"></span>
+    <input id="photoInput" type="file" accept="image/*" hidden>
   </label>
+  <button id="algBtn" type="button" class="alg-home-btn"></button>
   <form id="typeForm" class="type-form" autocomplete="off">
     <input id="codeInput" inputmode="numeric" pattern="[0-9 ]*" maxlength="16" data-ph="typePh">
     <button type="submit" class="go" data-t="go"></button>
@@ -49,6 +50,7 @@
 
 <main id="result" class="view" hidden></main>
 <main id="ranking" class="view" hidden></main>
+<main id="allergies" class="view" hidden></main>
 
 <div id="busy" class="busy" hidden><div class="spinner"></div><p id="busyText"></p><p id="busyStep" class="busy-step"></p></div>
 
@@ -61,12 +63,26 @@
     </div>
   </div>
   <div class="frame"><div class="laser"></div></div>
-  <p class="scan-hint" data-t="scanHint"></p>
-  <div class="scan-bar">
-    <button id="torchBtn" type="button" class="round" hidden aria-label="torch">🔦</button>
-    <button id="closeScan" type="button" class="round" aria-label="close">✕</button>
+  <p class="scan-hint bc-only" data-t="scanHint"></p>
+  <p class="scan-hint photo-only" data-t="scanHintPhoto"></p>
+  <div class="scan-bottom">
+    <p id="noBarcodeHint" class="nobc-hint" data-t="noBarcodeHint"></p>
+    <button id="snapBtn" type="button" class="snap-btn"><span>📷</span> <span data-t="snapBtn"></span></button>
+    <div class="scan-bar">
+      <button id="torchBtn" type="button" class="round" hidden aria-label="torch">🔦</button>
+      <label class="round gallery-round" aria-label="gallery">🖼<input id="scanGallery" type="file" accept="image/*" hidden></label>
+      <button id="closeScan" type="button" class="round" aria-label="close">✕</button>
+    </div>
   </div>
   <p id="scanEngine" class="scan-engine"></p>
+  <div id="snapPreview" class="snap-preview" hidden>
+    <img id="snapImg" alt="">
+    <p id="snapInfo" class="snap-info"></p>
+    <div class="snap-actions">
+      <button id="snapRetake" type="button" class="snap-retake" data-t="snapRetake"></button>
+      <button id="snapUse" type="button" class="snap-use" data-t="snapUse"></button>
+    </div>
+  </div>
 </div>
 
 <button id="scanNext" class="scan-next" type="button" hidden></button>

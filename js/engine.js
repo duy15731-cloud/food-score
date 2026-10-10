@@ -102,9 +102,14 @@ export function norm(s) {
   return String(s || '').normalize('NFC').toLowerCase()
     .replace(/[_]/g, ' ').replace(/\s+/g, ' ').trim();
 }
+const phraseCache = new Map();
 function stripPhrases(text, phrases) {
   let t = text;
-  for (const p of phrases || []) t = t.replace(new RegExp(esc(p), 'giu'), ' ');
+  for (const p of phrases || []) {
+    let re = phraseCache.get(p);
+    if (!re) { re = new RegExp(esc(p), 'giu'); phraseCache.set(p, re); }
+    t = t.replace(re, ' ');
+  }
   return t;
 }
 function matchesAny(text, words, notPhrases) {
@@ -864,8 +869,10 @@ export function analyze(input) {
     additiveCodes: allCodes, containsText: input.containsText || '', mayContainText: input.mayContainText || '',
   });
 
+  const allergens = findAllergens({ ingredients, ingredientsText: input.ingredientsText || '', containsText: input.containsText || '', mayContainText: input.mayContainText || '',
+    allergenTags: input.allergens || [], traceTags: input.traces || [], additiveCodes: tagCodes });
   return {
-    score, partial, capped, missing, band: score == null ? null : bandFor(score),
+    score, partial, capped, missing, band: score == null ? null : bandFor(score), allergens,
     parts: {
       nutrition: { points: nutPoints == null ? null : Math.round(nutPoints * 10) / 10, max: 60, nutriscore: ns },
       additives: { points: addPoints, max: 30, list: additives },
@@ -1111,13 +1118,217 @@ function analyzeNonFood(input, type) {
   for (const x of list) reasons.push({ kind: x.risk === 'low' ? 'info' : 'bad', en: `Contains ${x.label.en} — ${x.why.en}`, vi: `Có ${x.label.vi} — ${x.why.vi}` });
   if (hasText && !list.length) reasons.push({ kind: 'good', en: 'No concerning ingredients found in our list', vi: 'Không thấy thành phần đáng lo trong danh sách của chúng tôi' });
   const eczema = eczemaCheck({ ingredients, hasIngredientText: hasText, containsText: input.containsText || '', mayContainText: '', table: ECZEMA_CONTACT });
+  const allergens = findAllergens({ ingredients, ingredientsText: input.ingredientsText || '', containsText: input.containsText || '', mayContainText: input.mayContainText || '',
+    allergenTags: input.allergens || [], traceTags: input.traces || [], productType: type });
   return {
-    type, score, partial: false, capped, missing: hasText ? [] : ['ingredients'], band: score == null ? null : bandFor(score),
+    type, score, partial: false, capped, missing: hasText ? [] : ['ingredients'], band: score == null ? null : bandFor(score), allergens,
     parts: { harm: { points: score, list } },
     reasons, eczema, eczemaScore: eczemaScore(eczema), ingredients, nutrients: {}, category: type,
   };
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// MY ALLERGIES — the user ticks their own allergens; every scan checks them FIRST.
+// This is a WORD check of the printed / database ingredient text, not a lab test: it can only find what is
+// written. It never says "safe" — a "none found" result always tells the user to read the package.
+// Synonym lists REUSE the eczema / contact-eczema / hazard tables above (syn() merges them) and add
+// allergen-only names: INCI botanical names for food allergens in cosmetics, and the Open Food Facts
+// allergen tag ids (en:milk, en:gluten ...). Sources for the food list: US FALCPA + FASTER Act (9 major
+// allergens) and EU Regulation 1169/2011 Annex II (14 allergens incl. celery, mustard, lupin, molluscs,
+// sulphites >10 mg/kg); FDA 2025 food-allergen guidance (coconut no longer listed as a tree nut).
+// Skin list: NACDG / ACDS patch-test allergens (see ECZEMA_CONTACT) + EU 1223/2009 Annex III fragrance
+// allergens (the "26" that must be named on the label).
+//   source of a hit: 'ingredients' (in the ingredient list) | 'contains' (the CONTAINS line) |
+//                    'traces' (may contain / traces) | 'maybe' (cross-contact risk, e.g. oats -> gluten) |
+//                    'tag' (only in the database's allergen tags — crowd data can be wrong, e.g. Shin Ramyun
+//                    tagged milk/egg — so it is shown as "listed by database, not in ingredient text").
+// ---------------------------------------------------------------------------------------------
+const uniq = (a) => [...new Set(a)];
+const syn = (...lists) => uniq(lists.flat());
+const ecw = (id) => ECZ_BY_ID[id].words;
+const ecn = (id) => ECZ_BY_ID[id].not;
+const hzw = (id) => HAZARDS.find((x) => x.id === id).words;
+const Al = (id, group, name, words, opts = {}) => ({ id, group, name, words, not: opts.not || [], tags: opts.tags || [], additives: opts.additives || [],
+  maybe: opts.maybe || [], maybeWhy: opts.maybeWhy || null, note: opts.note || null, cosmeticWords: opts.cosmeticWords || [] });
+// plant "butters" are not dairy (shea, cocoa, mango, nut butters ...)
+const NOT_DAIRY_BUTTER = ['seed butter', 'kernel butter', 'parkii butter', 'shea) butter', 'nut butter', 'fruit butter', 'cacao butter', 'mango butter', 'kokum butter', 'murumuru butter', 'body butter'];
+export const ALLERGENS = [
+  // ---------------- FOOD ----------------
+  Al('milk', 'food', { en: 'Milk', vi: 'Sữa' },
+    syn(ecw('milk'), ['casein', 'caseinate', 'sodium caseinate', 'calcium caseinate', 'whey', 'whey protein', 'lactose', 'lactalbumin', 'lactoglobulin', 'ghee', 'butter', 'butterfat', 'butter oil', 'cream', 'sour cream', 'cheese', 'curds', 'milk solids', 'milk powder', 'skimmed milk', 'milk protein', 'hydrolyzed milk protein', 'lactis proteinum', 'lait', 'lactosérum', 'lactoserum', 'kefir', 'paneer']),
+    { not: syn(ecn('milk'), NOT_DAIRY_BUTTER, ['lactic acid', 'calcium lactate', 'sodium lactate', 'cream of coconut', 'dairy free']), tags: ['en:milk'] }),
+  Al('egg', 'food', { en: 'Egg', vi: 'Trứng' },
+    syn(ecw('egg'), ['egg powder', 'dried egg', 'albumin', 'albumen', 'ovalbumin', 'ovomucoid', 'ovotransferrin', 'ovovitellin', 'livetin', 'lysozyme', 'mayonnaise', 'meringue', 'ovum', 'ovum extract']),
+    { not: syn(ecn('egg'), ['egg-free', 'egg free']), tags: ['en:eggs'], additives: ['e1105'] }),
+  Al('peanut', 'food', { en: 'Peanut', vi: 'Đậu phộng (lạc)' },
+    syn(ecw('peanut'), ['arachis hypogaea', 'arachis oil', 'peanut oil', 'monkey nut', 'monkey nuts']),
+    { not: ['peanut-free', 'peanut free'], tags: ['en:peanuts'] }),
+  Al('treenuts', 'food', { en: 'Tree nuts', vi: 'Các loại hạt cây' },
+    syn(ecw('treenuts'), ['brazil nut', 'pine nut', 'pinyon', 'pignoli', 'marzipan', 'nougat', 'gianduja', 'frangipane', 'prunus amygdalus dulcis', 'prunus dulcis', 'sweet almond oil', 'juglans regia', 'corylus avellana', 'macadamia ternifolia', 'macadamia integrifolia', 'anacardium occidentale', 'pistacia vera', 'carya illinoinensis', 'bertholletia excelsa']),
+    { not: syn(ecn('treenuts'), ['tree nut-free', 'tree nut free']), tags: ['en:nuts'] }),
+  Al('coconut', 'food', { en: 'Coconut', vi: 'Dừa' },
+    ['coconut', 'coconut oil', 'coconut milk', 'coconut cream', 'cocos nucifera', 'copra', 'noix de coco', 'dừa', 'sữa dừa', 'nước cốt dừa'],
+    { not: ['coconut-free', 'coconut free'],
+      note: { en: 'Coconut is a separate, uncommon allergy — the US FDA no longer counts it as a tree nut (2025 guidance). Coconut-derived soap ingredients (coco-glucoside, cocamide…) are not flagged.', vi: 'Dị ứng dừa là loại riêng, ít gặp — FDA Mỹ không còn xếp dừa vào hạt cây (hướng dẫn 2025). Các chất tạo bọt gốc dừa (coco-glucoside, cocamide…) không bị đánh dấu.' } }),
+  Al('wheat', 'food', { en: 'Wheat', vi: 'Lúa mì' },
+    ['wheat', 'wheat flour', 'whole wheat', 'wheat starch', 'wheat germ', 'wheat gluten', 'wheat protein', 'hydrolyzed wheat protein', 'triticum', 'triticum vulgare', 'triticum aestivum', 'triticum durum', 'semolina', 'durum', 'spelt', 'farina', 'couscous', 'bulgur', 'seitan', 'einkorn', 'emmer', 'kamut', 'farro', 'enriched flour', 'bleached flour', 'all-purpose flour', 'blé', 'froment', 'épeautre', 'lúa mì', 'bột mì'],
+    { not: ['buckwheat', 'wheat-free', 'wheat free', 'blé noir'], tags: ['en:wheat'] }),
+  Al('gluten', 'food', { en: 'Gluten (wheat, barley, rye…)', vi: 'Gluten (lúa mì, lúa mạch, lúa mạch đen…)' },
+    syn(ecw('wheat'), ['triticale', 'farro', 'kamut', 'einkorn', 'emmer', 'malt', 'malt extract', 'malt flavoring', 'malt flavouring', 'malted barley', 'malted', 'barley malt', 'malt vinegar', "brewer's yeast", 'hordeum vulgare', 'secale cereale', 'triticum', 'triticum vulgare', 'hydrolyzed wheat protein', 'wheat starch']),
+    { not: ['buckwheat', 'gluten free', 'gluten-free', 'sans gluten', 'no gluten', 'không chứa gluten', 'không gluten', 'blé noir'], tags: ['en:gluten'],
+      maybe: ['oat', 'oats', 'oatmeal', 'oat flour', 'oat bran', 'rolled oats', 'avena sativa', 'avoine', 'yến mạch'],
+      maybeWhy: { en: 'oats — often cross-contaminated with wheat unless labelled gluten-free', vi: 'yến mạch — hay bị lẫn lúa mì nếu không ghi “không gluten”' } }),
+  Al('oats', 'food', { en: 'Oats', vi: 'Yến mạch' },
+    ['oat', 'oats', 'oatmeal', 'oat flour', 'oat bran', 'rolled oats', 'oat fibre', 'oat fiber', 'avena sativa', 'colloidal oatmeal', 'avoine', 'yến mạch'],
+    { not: ['oat-free', 'oat free'] }),
+  Al('soy', 'food', { en: 'Soy', vi: 'Đậu nành' },
+    ['soy', 'soya', 'soybean', 'soybeans', 'soy lecithin', 'soya lecithin', 'soy protein', 'soy sauce', 'edamame', 'tofu', 'miso', 'tempeh', 'natto', 'shoyu', 'tamari', 'yuba', 'okara', 'kinako', 'glycine soja', 'glycine max', 'soja', 'đậu nành', 'đậu tương', 'đậu hũ', 'nước tương'],
+    { not: ['soy-free', 'soy free'], tags: ['en:soybeans'] }),
+  Al('fish', 'food', { en: 'Fish', vi: 'Cá' },
+    syn(ecw('fish'), ['fish oil', 'fish gelatin', 'surimi', 'bonito', 'cá ngừ', 'cá hồi']),
+    { not: syn(ecn('fish'), ['fish-free']), tags: ['en:fish'] }),
+  Al('crustaceans', 'food', { en: 'Shellfish (crustaceans: shrimp, crab, lobster)', vi: 'Giáp xác (tôm, cua, tôm hùm)' },
+    ['shrimp', 'prawn', 'crab', 'lobster', 'crayfish', 'crawfish', 'langoustine', 'scampi', 'krill', 'crustacean', 'crustaceans', 'shellfish', 'crevette', 'homard', 'tôm', 'cua', 'ghẹ', 'mắm tôm'],
+    { not: ['shellfish-free', 'imitation crab-free'], tags: ['en:crustaceans'] }),
+  Al('molluscs', 'food', { en: 'Molluscs (squid, oyster, clam, mussel)', vi: 'Nhuyễn thể (mực, hàu, nghêu, sò)' },
+    ['mollusc', 'molluscs', 'mollusk', 'mollusks', 'oyster', 'oyster sauce', 'clam', 'mussel', 'scallop', 'squid', 'calamari', 'octopus', 'cuttlefish', 'snail', 'escargot', 'abalone', 'whelk', 'cockle', 'shellfish', 'moule', 'sò', 'hến', 'nghêu', 'hàu', 'mực', 'bạch tuộc', 'ốc'],
+    { not: ['shellfish-free'], tags: ['en:molluscs'] }),
+  Al('sesame', 'food', { en: 'Sesame', vi: 'Mè (vừng)' },
+    syn(ecw('sesame'), ['sesame oil', 'sesame seed', 'sesamum indicum', 'gingelly', 'benne seed']),
+    { not: ['sesame-free', 'sesame free'], tags: ['en:sesame-seeds'] }),
+  Al('corn', 'food', { en: 'Corn (maize)', vi: 'Bắp (ngô)' },
+    ['corn', 'maize', 'cornstarch', 'corn starch', 'cornmeal', 'corn flour', 'cornflour', 'corn syrup', 'corn oil', 'high fructose corn syrup', 'popcorn', 'polenta', 'grits', 'hominy', 'masa', 'zea mays', 'maïs', 'bắp', 'ngô'],
+    { not: ['peppercorn', 'peppercorns', 'corned', 'corn-free', 'corn free'],
+      note: { en: 'Only corn named on the label is found — dextrose, maltodextrin, xanthan gum and citric acid are often made from corn but are not flagged.', vi: 'Chỉ tìm thấy bắp khi được ghi tên — dextrose, maltodextrin, xanthan, axit citric thường làm từ bắp nhưng không bị đánh dấu.' } }),
+  Al('mustard', 'food', { en: 'Mustard', vi: 'Mù tạt' },
+    ['mustard', 'mustard seed', 'mustard oil', 'mustard flour', 'sinapis', 'sinapis alba', 'brassica juncea', 'brassica nigra', 'moutarde', 'mù tạt'],
+    { not: ['mustard-free'], tags: ['en:mustard'] }),
+  Al('celery', 'food', { en: 'Celery', vi: 'Cần tây' },
+    ['celery', 'celeriac', 'celery seed', 'celery salt', 'celery powder', 'apium graveolens', 'céleri', 'cần tây'],
+    { tags: ['en:celery'] }),
+  Al('lupin', 'food', { en: 'Lupin', vi: 'Đậu lupin' },
+    ['lupin', 'lupine', 'lupini', 'lupinus', 'lupin flour', 'lupinus albus'],
+    { tags: ['en:lupin'] }),
+  Al('sulfites', 'food', { en: 'Sulfites', vi: 'Sulfit' },
+    syn(ecw('sulphites'), ['sodium metabisulfite', 'potassium metabisulfite', 'sodium bisulfite', 'sodium sulfite', 'potassium bisulfite', 'sulfiting agents']),
+    { not: ['sulfite-free', 'sulfite free', 'no sulfites added'], tags: ['en:sulphur-dioxide-and-sulphites'], additives: ECZ_BY_ID.sulphites.additives }),
+  // ---------------- SKIN & HOUSEHOLD ----------------
+  Al('fragrance', 'skin', { en: 'Fragrance / parfum', vi: 'Hương liệu / nước hoa' },
+    ecw('c_fragrance'),
+    // INCI "Aroma" = a fragrance/flavour additive in cosmetics; on FOOD labels "aroma(s)" just means flavouring
+    { not: ecn('c_fragrance'), cosmeticWords: ['aroma', 'arôme'] }),
+  Al('fragallergens', 'skin', { en: 'Named fragrance allergens (EU list of 26)', vi: 'Chất gây dị ứng hương liệu có tên (26 chất theo EU)' },
+    syn(ecw('c_fragallergen'), ['amylcinnamyl alcohol', 'anisyl alcohol', 'methyl 2-octynoate', 'methyl heptine carbonate', 'oakmoss', 'oak moss', 'treemoss', 'tree moss', 'lyral', 'lilial']),
+    { note: { en: 'EU law requires these 26 to be named on cosmetics above 0.001% (leave-on) / 0.01% (rinse-off); products sold elsewhere may hide them inside "fragrance".', vi: 'Luật EU bắt buộc ghi tên 26 chất này trên mỹ phẩm; sản phẩm bán nơi khác có thể giấu chúng trong chữ “fragrance”.' } }),
+  Al('balsam', 'skin', { en: 'Balsam of Peru (Myroxylon pereirae)', vi: 'Balsam Peru (Myroxylon pereirae)' },
+    ['balsam of peru', 'peru balsam', 'balsam peru', 'myroxylon pereirae', 'myroxylon balsamum', 'balsamum peruvianum', 'tolu balsam'],
+    { note: { en: 'Often hidden inside "fragrance"; people allergic to it may also react to cinnamon, vanilla, cloves and citrus peel.', vi: 'Thường nằm ẩn trong “fragrance”; người dị ứng có thể phản ứng với quế, vani, đinh hương, vỏ cam chanh.' } }),
+  Al('essentialoils', 'skin', { en: 'Essential oils (tea tree, lavender…)', vi: 'Tinh dầu (tràm trà, oải hương…)' },
+    syn(ecw('c_essentialoil'), hzw('essential-oil'), ['lavandula angustifolia oil', 'citrus aurantium bergamia', 'bergamot oil', 'lemongrass oil', 'cymbopogon', 'ylang-ylang', 'geranium oil', 'pelargonium graveolens oil', 'patchouli oil', 'sandalwood oil', 'chamomile oil'])),
+  Al('mi', 'skin', { en: 'Methylisothiazolinone (MI / MCI)', vi: 'Methylisothiazolinone (MI / MCI)' }, syn(ecw('c_mi'), hzw('mi'))),
+  Al('formaldehyde', 'skin', { en: 'Formaldehyde & formaldehyde releasers', vi: 'Formaldehyde & chất giải phóng formaldehyde' },
+    syn(ecw('c_formaldehyde'), hzw('formaldehyde'), hzw('fa-releaser'), ['polyoxymethylene urea', 'benzylhemiformal'])),
+  Al('parabens', 'skin', { en: 'Parabens', vi: 'Paraben' },
+    syn(ecw('c_parabens'), hzw('pb-parabens'), hzw('me-parabens'), hzw('banned-parabens')), { additives: ['e214', 'e215', 'e216', 'e217', 'e218', 'e219'] }),
+  Al('pg', 'skin', { en: 'Propylene glycol', vi: 'Propylene glycol' }, ['propylene glycol', '1,2-propanediol', 'propane-1,2-diol'], { additives: ['e1520'] }),
+  Al('lanolin', 'skin', { en: 'Lanolin (wool wax)', vi: 'Lanolin (sáp lông cừu)' }, syn(ecw('c_lanolin'), ['lanolin oil', 'hydrogenated lanolin', 'lanolin acid', 'lanolin wax'])),
+  Al('capb', 'skin', { en: 'Cocamidopropyl betaine', vi: 'Cocamidopropyl betaine' }, ecw('c_capb')),
+  Al('ppd', 'skin', { en: 'Hair dye PPD (p-phenylenediamine)', vi: 'Thuốc nhuộm tóc PPD' }, syn(ecw('c_ppd'), ['toluene-2,5-diamine sulfate', 'black henna'])),
+  Al('nickel', 'skin', { en: 'Nickel', vi: 'Niken' }, ['nickel', 'nickel sulfate', 'nickel sulphate', 'ci 77775'],
+    { note: { en: 'Ingredient lists and databases almost never list nickel (it comes from metal parts, tools and some pigments) — "not found" here tells you nothing.', vi: 'Danh sách thành phần và cơ sở dữ liệu gần như không bao giờ ghi niken (đến từ kim loại, dụng cụ, một số chất màu) — “không thấy” ở đây không có ý nghĩa gì.' } }),
+  Al('latex', 'skin', { en: 'Latex (natural rubber)', vi: 'Latex (cao su tự nhiên)' }, ['latex', 'natural rubber', 'natural rubber latex', 'hevea brasiliensis', 'rubber latex'],
+    { not: ['latex-free', 'latex free', 'synthetic latex', 'no latex'],
+      note: { en: 'Gloves, sponges, balloons and some adhesives contain latex but databases rarely list it — read the package.', vi: 'Găng tay, mút, bóng bay, một số keo dán có latex nhưng cơ sở dữ liệu hiếm khi ghi — hãy đọc bao bì.' } }),
+  Al('shea', 'skin', { en: 'Shea butter (Butyrospermum parkii)', vi: 'Bơ hạt mỡ (Butyrospermum parkii)' }, ['butyrospermum parkii', 'shea butter', 'shea', 'vitellaria paradoxa'],
+    { note: { en: 'Low evidence: refined shea butter carries almost no nut protein and reactions are very rare — only tick this if a doctor told you to.', vi: 'Bằng chứng yếu: bơ hạt mỡ tinh luyện gần như không có đạm hạt, phản ứng rất hiếm — chỉ chọn nếu bác sĩ dặn.' } }),
+];
+export const ALLERGEN_BY_ID = Object.fromEntries(ALLERGENS.map((a) => [a.id, a]));
+const ALG_SOURCE_RANK = { ingredients: 0, contains: 1, tag: 2, traces: 3, maybe: 4 };
+// Every allergen found in a product (independent of anyone's profile). Returns { hasList, hits: [{id, source, matched}] }.
+export function findAllergens({ ingredients = [], ingredientsText = '', containsText = '', mayContainText = '', allergenTags = [], traceTags = [], additiveCodes = [], productType = 'food' } = {}) {
+  const hits = [];
+  const seen = new Set();
+  const add = (id, source, matched) => { const k = `${id}|${source}|${matched}`; if (!seen.has(k)) { seen.add(k); hits.push({ id, source, matched }); } };
+  const scan = (text, source, label) => {
+    const t = norm(text);
+    if (!t) return;
+    for (const a of ALLERGENS) {
+      const w = matchesAny(t, a.words, a.not) || (productType !== 'food' && a.cosmeticWords.length ? matchesAny(t, a.cosmeticWords, a.not) : null);
+      if (w) add(a.id, source, label || w);
+    }
+    for (const code of eNumbersInText(t)) for (const a of ALLERGENS) if (a.additives.includes(code)) add(a.id, source, code.toUpperCase());
+  };
+  const allText = norm([ingredientsText, ...ingredients.map((i) => i.text)].join(' '));
+  if (ingredients.length) {
+    // The parser can split "Butyrospermum Parkii (Shea) Butter" into "... (Shea)" + "Butter". A hit found in an
+    // ingredient's OWN words must therefore also stand on the whole label text, where "(shea) butter" is intact
+    // and removed by the not-phrases. Hits that come only from the database's English id are kept as they are.
+    const full = norm(ingredientsText);
+    for (const ing of ingredients) {
+      const own = norm(ing.text), viaId = norm(idWords(ing.id));
+      for (const a of ALLERGENS) {
+        const words = productType !== 'food' ? [...a.words, ...a.cosmeticWords] : a.words;
+        let w = matchesAny(own, words, a.not);
+        if (w && full && !matchesAny(full, [w], a.not)) w = null;
+        if (!w && viaId) w = matchesAny(viaId, words, a.not);
+        if (w) add(a.id, 'ingredients', ing.text);
+      }
+      for (const code of eNumbersInText(own)) for (const a of ALLERGENS) if (a.additives.includes(code)) add(a.id, 'ingredients', code.toUpperCase());
+    }
+  } else scan(ingredientsText, 'ingredients');
+  scan(containsText, 'contains');
+  // cross-contact risk words (oats -> gluten) unless the product says gluten-free
+  for (const a of ALLERGENS) {
+    if (!a.maybe.length || hits.some((h) => h.id === a.id)) continue;
+    if (/gluten[- ]free|sans gluten|không (?:chứa )?gluten/.test(allText) && a.id === 'gluten') continue;
+    const w = matchesAny(allText, a.maybe);
+    if (w) add(a.id, 'maybe', w);
+  }
+  const textIds = new Set(hits.map((h) => h.id));
+  for (const a of ALLERGENS) {
+    const tag = a.tags.find((tg) => allergenTags.includes(tg));
+    if (tag && !textIds.has(a.id)) add(a.id, 'tag', tag);
+  }
+  for (const code of additiveCodes) for (const a of ALLERGENS) if (a.additives.includes(code) && !textIds.has(a.id)) add(a.id, 'tag', code.toUpperCase());
+  // "may contain" / traces only count when the allergen is not already IN the product
+  const inIds = new Set(hits.filter((h) => h.source !== 'maybe').map((h) => h.id));
+  const tr = norm(mayContainText);
+  if (tr) for (const a of ALLERGENS) { const w = matchesAny(tr, a.words, a.not); if (w && !inIds.has(a.id)) add(a.id, 'traces', w); }
+  for (const a of ALLERGENS) { const tag = a.tags.find((tg) => traceTags.includes(tg)); if (tag && !inIds.has(a.id)) add(a.id, 'traces', tag); }
+  hits.sort((x, y) => ALG_SOURCE_RANK[x.source] - ALG_SOURCE_RANK[y.source]);
+  const hasList = !!(String(ingredientsText || '').trim() || ingredients.length || String(containsText || '').trim());
+  return { hasList, hits };
+}
+// The user's view: which of THEIR allergens are in it. status: off (no profile) | red | amber | unknown | none.
+//   red    = in the ingredients / CONTAINS line / database tags (tag-only ones are marked tagOnly)
+//   amber  = only "may contain" / traces / cross-contact
+//   unknown= no ingredient list to check (never "safe")
+//   none   = none of the ticked allergens in the listed ingredients (still: read the package)
+export function allergyReport(found, profile = []) {
+  const ids = (profile || []).filter((id) => ALLERGEN_BY_ID[id]);
+  if (!ids.length) return { status: 'off', red: [], amber: [], unknown: false, notes: [] };
+  const hits = (found && found.hits) || [];
+  const group = (pred) => ids.map((id) => {
+    const hs = hits.filter((h) => h.id === id && pred(h));
+    if (!hs.length) return null;
+    const a = ALLERGEN_BY_ID[id];
+    return { id, name: a.name, matched: uniq(hs.map((h) => h.matched)), sources: uniq(hs.map((h) => h.source)), tagOnly: hs.every((h) => h.source === 'tag'), maybeWhy: a.maybeWhy };
+  }).filter(Boolean);
+  const red = group((h) => ['ingredients', 'contains', 'tag'].includes(h.source));
+  const redIds = new Set(red.map((r) => r.id));
+  const amber = group((h) => ['traces', 'maybe'].includes(h.source)).filter((x) => !redIds.has(x.id));
+  const unknown = !(found && found.hasList);
+  const status = red.length ? 'red' : amber.length ? 'amber' : unknown ? 'unknown' : 'none';
+  const notes = ids.map((id) => ALLERGEN_BY_ID[id]).filter((a) => a.note && !redIds.has(a.id)).map((a) => ({ id: a.id, name: a.name, note: a.note }));
+  return { status, red, amber, unknown, notes };
+}
+// compact form kept in "My products" history so the ranking can show a ⚠️ chip for whatever the profile is today
+export const allergenSummary = (found) => ({
+  c: uniq(found.hits.filter((h) => ['ingredients', 'contains', 'tag'].includes(h.source)).map((h) => h.id)),
+  t: uniq(found.hits.filter((h) => ['traces', 'maybe'].includes(h.source)).map((h) => h.id)),
+  u: !found.hasList,
+});
 
 // ---------------------------------------------------------------------------------------------
 // Adapters: OFF product -> analyze() input; OCR text -> analyze() input
@@ -1241,7 +1452,18 @@ export function extractLabelText(rawText) {
   let ingredients = '';
   if (m) {
     const rest = t.slice(m.index + m[0].length);
-    const stop = rest.search(/\n\s*\n|(?<!may\s)\bcontains\s*[:;]|\n\s*contains\b(?![^\n]*%)(?!\s+l\S{0,4}s\s+than)|may\s+contain|manufactured|distributed|produced\s+(?:by|in)|nutrition\s+facts|allergen/i);
+    const hard = rest.search(/(?<!may\s)\bcontains\s*[:;]|\n\s*contains\b(?![^\n]*%)(?!\s+l\S{0,4}s\s+than)|may\s+contain|manufactured|distributed|produced\s+(?:by|in)|nutrition\s+facts|allergen/i);
+    // A blank line ends the list — unless OCR put it INSIDE the list: a bracket is still open
+    // ("DRIED FLAKES [BOK CHOY, ... DEXTROSE)⏎⏎GREEN ONION, ...]") or the text before it ends with a comma.
+    let stop = hard;
+    const blankRe = /\n\s*\n/g;
+    let b;
+    while ((b = blankRe.exec(rest)) && (hard < 0 || b.index < hard)) {
+      const before = rest.slice(0, b.index);
+      const open = (before.match(/[([{]/g) || []).length - (before.match(/[)\]}]/g) || []).length;
+      if (open > 0 || /,\s*$/.test(before)) continue;
+      stop = b.index; break;
+    }
     ingredients = (stop >= 0 ? rest.slice(0, stop) : rest)
       .replace(/-[ \t]*\n[ \t]*(?=(?:and|or|&)\b)/gi, '- ').replace(/-\n/g, '').replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
     ingredients = cleanOcrIngredients(ingredients);
