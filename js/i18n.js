@@ -231,6 +231,7 @@ export const STR = {
   pricesByCode: { vi: '(tìm theo mã vạch)', en: '(searching by barcode)' },
   // ---- Calorie tracker + weight goal (v1.7). All numbers come from diet.js; nothing here leaves the phone. ----
   trDisclaimer: { vi: 'Chỉ để tham khảo, không phải lời khuyên y tế. Hãy hỏi bác sĩ nếu bạn có bệnh, đang mang thai hoặc dưới 18 tuổi.', en: 'Information only, not medical advice. Talk to a doctor if you have a health condition, are pregnant, or are under 18.' },
+  fdaSource: { vi: 'Thành phần lấy từ nhãn thuốc FDA của sản phẩm (openFDA) — hãy đối chiếu với bao bì.', en: "Ingredients from the product's FDA drug label (openFDA) — check them against the package." },
   undo: { vi: '↶ Hoàn tác', en: '↶ Undo' },
   trSaveFail: { vi: 'Không lưu được — bộ nhớ điện thoại có thể đã đầy.', en: 'Could not save — the phone storage may be full.' },
   trPrivate: { vi: 'Mọi dữ liệu chỉ lưu trên điện thoại này, không gửi đi đâu.', en: 'Everything stays on this phone — nothing is sent anywhere.' },

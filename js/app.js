@@ -113,33 +113,18 @@ function cachePut(code, product, db = 'food') {
   }
 }
 
-// Look one code up in ONE database (all barcode candidates, in order). Same three states as before.
-async function lookupIn(db, cands) {
-  let failed = false;
-  for (const c of cands) {
-    let state = 'failed', body = null, status = 0;
-    try {
-      const res = await fetch(E.offUrl(c, db));
-      status = res.status;
-      body = await res.json().catch(() => null);
-      state = E.classifyOffResponse(status, body);
-    } catch { state = 'failed'; }
-    if (state === 'found') { cachePut(c, body.product, db); return { state, product: body.product, code: c, db }; }
-    if (state === 'failed') failed = true;
-  }
-  return { state: failed ? 'failed' : 'notfound', db };
-}
-// Open Food Facts first (most scans are food); if it does not have the code, ask Open Beauty Facts and
-// Open Products Facts at the same time. A database that did not answer makes the result "failed", never "not found".
+// The lookup chain lives in engine.js (E.lookupProduct): ONE combined Open*Facts call (?product_type=all), the old
+// per-site chain only when that call gets no answer, then the FDA drug label for OTC personal care. The page only
+// supplies the network and the cache. Same three states: found / notfound / failed.
+const CACHE_DBS = [...E.DATABASES.map((d) => d.id), E.FDA_SOURCE.id];
+const fetchJson = async (url) => { const r = await fetch(url); return { status: r.status, body: await r.json().catch(() => null), url: r.url || url }; };
 async function lookup(code, format = '') {
   const cands = E.lookupCandidates(code, format);
-  for (const d of E.DATABASES) for (const c of cands) { const p = cacheGet(c, d.id); if (p) return { state: 'found', product: p, code: c, db: d.id, cached: true, tried: cands }; }
-  const food = await lookupIn('food', cands);
-  if (food.state === 'found') return { ...food, tried: cands };
-  const rest = await Promise.all(E.DATABASES.filter((d) => d.id !== 'food').map((d) => lookupIn(d.id, cands)));
-  const all = [food, ...rest];
-  const r = E.combineLookups(all);
-  return { ...r, code: r.code || code, tried: cands, dbStates: all.map((x) => `${x.db}:${x.state}`) };
+  for (const db of CACHE_DBS) for (const c of cands) { const p = cacheGet(c, db); if (p) return { state: 'found', product: p, code: c, db, cached: true, tried: cands }; }
+  const r = await E.lookupProduct(code, { fetchJson, format });
+  window.__lastLookup = { state: r.state, db: r.db, via: r.via, fda: r.fda };
+  if (r.state === 'found') cachePut(r.code, r.product, r.db);
+  return { ...r, code: r.code || code };
 }
 
 // ------------------------------------------------------------------ product pictures: database by barcode, else the extra source
@@ -575,13 +560,14 @@ function renderAnalysis(a, { product, code, photo, db }) {
 function renderNonFood(a, { product, code, photo, db }) {
   const name = product ? productName(product) : t('photoName');
   const img = (product && E.productPhoto(product)) || (current && current.fallbackImg) || '';
-  const dbName = db ? (E.DATABASES.find((d) => d.id === db) || {}).name : '';
+  const dbName = db ? ([...E.DATABASES, E.FDA_SOURCE].find((d) => d.id === db) || {}).name : '';
   let out = `<section class="card score-card">`;
   out += `<div class="prod">${img ? `<img src="${h(img)}" alt="" class="prod-img" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
     <div class="prod-text"><div class="prod-name" id="prodName">${h(name || code)}</div>${product && product.brands ? `<div class="prod-brand">${h(product.brands)}</div>` : ''}
     <div class="type-chip" id="typeChip">${TYPE_ICON[a.type]} ${h(t('type_' + a.type))}${dbName ? ` · ${h(dbName)}` : ''}</div>
     ${code ? `<div class="muted small">${h(t('barcode'))} ${h(code)}</div>` : ''}</div></div>`;
   if (photo) out += `<div class="banner warn">${h(t('photoWarn'))}</div>`;
+  if (product && product.ingredients_source === 'fda') out += `<div class="banner info" id="fdaSource">${h(t('fdaSource'))}</div>`;
   out += `<div class="score-row">${scoreCircles(a)}</div>`;
   if (a.score == null) {
     out += `<div class="banner info" id="noIngMsg">${h(t('nfNoIngredients'))}</div>${photoActions()}`;

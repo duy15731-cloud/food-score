@@ -12,12 +12,116 @@ export const OFF_FIELDS = ['code', 'product_name', 'product_name_en', 'product_n
   'ingredients', 'allergens_tags', 'traces_tags', 'additives_tags', 'nutriments', 'nova_group',
   'nutriscore_score', 'nutriscore_grade', 'nutriscore', 'categories_tags', 'lang',
   // portion sizes for the calorie log (v1.7; cached products without them still work — diet.js falls back to `quantity`)
-  'serving_size', 'serving_quantity', 'serving_quantity_unit', 'product_quantity', 'product_quantity_unit'];
+  'serving_size', 'serving_quantity', 'serving_quantity_unit', 'product_quantity', 'product_quantity_unit',
+  'product_type'];   // which Open*Facts site holds it: food | beauty | petfood | product
 
 // db: 'food' (Open Food Facts) | 'beauty' (Open Beauty Facts) | 'products' (Open Products Facts) — see DATABASES
 export function offUrl(code, db = 'food') {
   const host = (DATABASES.find((d) => d.id === db) || DATABASES[0]).host;
   return `https://${host}/api/v2/product/${code}.json?fields=${OFF_FIELDS.join(',')}`;
+}
+
+// ONE call for all three sites: Open Beauty Facts with ?product_type=all answers for a product filed on ANY
+// Open*Facts site (it redirects to the site that holds it; the redirect carries CORS headers). Asking each site
+// separately missed products filed under another type (OBF answers 404 "found with a different product type").
+export const offAllUrl = (code) => `https://world.openbeautyfacts.org/api/v2/product/${code}.json?product_type=all&fields=${OFF_FIELDS.join(',')}`;
+// which database a combined-call answer came from: the product's own product_type, else the host it was served by
+export function dbOfProduct(p, finalUrl = '') {
+  const pt = p && p.product_type;
+  if (pt === 'beauty') return 'beauty';
+  if (pt === 'product') return 'products';
+  if (pt === 'food' || pt === 'petfood') return 'food';
+  if (/openbeautyfacts\./.test(finalUrl)) return 'beauty';
+  if (/openproductsfacts\./.test(finalUrl)) return 'products';
+  return 'food';
+}
+
+// openFDA drug labels (public domain, no key, ~1,000 calls/day per phone): over-the-counter personal care such as
+// sunscreen, antiperspirant, toothpaste and dandruff shampoo carries an FDA "Drug Facts" label with active and
+// inactive ingredients. Searched by the 0-padded 13-digit UPC (the form openFDA stores).
+export const FDA_SOURCE = { id: 'fda', name: 'FDA drug label (openFDA)' };
+export function fdaUpc13(code) {
+  let c = String(code || '').replace(/\D/g, '');
+  if (c.length === 8) c = expandUpcE(c) || '';
+  if (c.length === 12) c = '0' + c;
+  return c.length === 13 ? c : '';
+}
+export const fdaLabelUrl = (code) => { const c = fdaUpc13(code); return c ? `https://api.fda.gov/drug/label.json?search=openfda.upc:%22${c}%22&limit=1` : ''; };
+export function classifyFdaResponse(httpStatus, body) {
+  if (httpStatus === 200 && body && Array.isArray(body.results) && body.results.length) return 'found';
+  if (httpStatus === 404) return 'notfound';   // openFDA: {"error":{"code":"NOT_FOUND"}}
+  return 'failed';
+}
+// "Active ingredient(s) Avobenzone 3% ... Purpose Sunscreen" + "Inactive ingredients water, ..." -> one ingredient list
+const fdaText = (v) => (Array.isArray(v) ? v.join(' ') : String(v || '')).replace(/\s+/g, ' ').trim();
+export function fdaIngredientsText(label) {
+  const active = fdaText(label.active_ingredient)
+    .replace(/^\s*(drug\s+facts\s+)?active\s+ingredients?\s*(\((?:in each|per)[^)]*\))?\s*[:\-–]?\s*/i, '')
+    .replace(/\(\s*\d+(?:\.\d+)?\s*%[^)]*\)/g, ',')          // "Aluminum Sesquichlorohydrate (16%)" -> "Aluminum Sesquichlorohydrate,"
+    .replace(/\bpurposes?\b[\s\S]*$/i, '')                         // the "Purpose" column is not an ingredient
+    .replace(/\s*\d+(?:\.\d+)?\s*%\s*(?:w\/w|w\/v)?/gi, ',')   // "Avobenzone 3% Homosalate 10%" -> "Avobenzone, Homosalate,"
+    .replace(/\s*,\s*(,\s*)*/g, ', ').replace(/,\s*\(/g, ' (').replace(/^[,\s]+|[,\s.]+$/g, '');
+  const inactive = fdaText(label.inactive_ingredient)
+    .replace(/^\s*(drug\s+facts\s+)?inactive\s+ingredients?\s*[:\-–]?\s*/i, '').replace(/[\s.]+$/, '');
+  return [active, inactive].filter(Boolean).join(', ');
+}
+export function productFromFdaLabel(label) {
+  const o = label.openfda || {};
+  const first = (a) => (Array.isArray(a) ? a[0] : a) || '';
+  return { product_name: first(o.brand_name) || first(o.generic_name) || '', brands: first(o.manufacturer_name), ingredients_text: fdaIngredientsText(label), ingredients_source: 'fda' };
+}
+
+// The whole barcode lookup, with the network passed in (so it is tested with a fake fetch):
+//   fetchJson(url) -> {status, body, url}   (status 0 = no answer)
+// 1) the combined Open*Facts call for every barcode candidate; 2) only if that call could not be answered, the
+// old one-site-at-a-time chain; 3) for a non-food product with no ingredient list, or a code no site has, the FDA
+// drug label. States stay three: found / notfound / failed (a site that did not answer is never "not found").
+export async function lookupProduct(raw, { fetchJson, format = '' } = {}) {
+  const cands = lookupCandidates(raw, format);
+  const ask = async (url) => { try { return (await fetchJson(url)) || { status: 0, body: null, url }; } catch { return { status: 0, body: null, url }; } };
+  let hit = null, failed = false, via = 'all';
+  for (const c of cands) {
+    const r = await ask(offAllUrl(c));
+    const st = classifyOffResponse(r.status, r.body);
+    if (st === 'found') { hit = { code: c, product: r.body.product, db: dbOfProduct(r.body.product, r.url || '') }; break; }
+    if (st === 'failed') failed = true;
+  }
+  let state = hit ? 'found' : failed ? 'failed' : 'notfound';
+  if (!hit && failed) {                       // the combined call did not answer: ask each site (old chain)
+    via = 'chain';
+    const results = [];
+    for (const d of DATABASES) {
+      const res = { state: 'notfound', db: d.id };
+      for (const c of cands) {
+        const r = await ask(offUrl(c, d.id));
+        const st = classifyOffResponse(r.status, r.body);
+        if (st === 'found') { Object.assign(res, { state: 'found', product: r.body.product, code: c }); break; }
+        if (st === 'failed') res.state = 'failed';
+      }
+      results.push(res);
+      if (res.state === 'found') break;
+    }
+    const comb = combineLookups(results);
+    if (comb.state === 'found') hit = { code: comb.code, product: comb.product, db: comb.db };
+    state = comb.state;
+  }
+  const nonFood = hit && productTypeOf(hit.db, hit.product.categories_tags || []) !== 'food';
+  let fda = 'skipped';
+  if ((nonFood && !pickIngredientText(hit.product).trim()) || state === 'notfound') {
+    const url = fdaLabelUrl(raw);
+    if (url) {
+      const r = await ask(url);
+      fda = classifyFdaResponse(r.status, r.body);
+      if (fda === 'found') {
+        const fp = productFromFdaLabel(r.body.results[0]);
+        if (fp.ingredients_text) {
+          if (hit) hit.product = { ...hit.product, ingredients_text: fp.ingredients_text, ingredients_source: 'fda' };
+          else { hit = { code: cands[0], product: { ...fp, code: cands[0] }, db: 'fda' }; state = 'found'; }
+        }
+      }
+    }
+  }
+  return hit ? { state: 'found', ...hit, tried: cands, via, fda } : { state, tried: cands, via, fda };
 }
 
 // Classify one OFF response into the three states. `httpStatus` 0 = network error.
@@ -922,7 +1026,18 @@ export const DATABASES = [
 ];
 const PERSONAL_CARE_RE = /cosmetic|beauty|hygiene|personal-care|toilet|shampoo|soap|shower|bath|deodorant|toothpaste|dental|skin|hair|lotion|cream|sun|make-up|makeup|baby-care|diaper/;
 // food | cosmetic (personal care: skin, hair, body) | household (cleaners, laundry, other non-food)
+// Products filed on the FOOD site by mistake (Clorox wipes "en:disinfectant-wipes", Method "en:all-purpose-cleaner"):
+// a category that can only be non-food overrides the site. Matched on whole tag starts so "en:dishes",
+// "en:ice-creams" or "en:sunflower-oils" can never trip it.
+const MISFILED_HOUSEHOLD = /^[a-z]{2}:(disinfect|all-purpose-clean|cleaning|cleaners?\b|surface-clean|glass-clean|detergents?\b|laundry|dish-?(?:soaps?|washing|liquids?|detergents?)|dishwasher-(?:tablets|detergents?)|bleach|household)/;
+const MISFILED_COSMETIC = /^[a-z]{2}:(cosmetics?\b|body-wash|shower-gels?|shampoos?|hair-conditioners?|deodorants?|antiperspirants?|toothpastes?|sunscreens?|skin-care|body-lotions?|moisturi[sz]ers?|hand-soaps?|liquid-soaps?)/;
 export function productTypeOf(db, categories = []) {
+  if (db === 'fda') return 'cosmetic';        // OTC drug labels here are personal care (sunscreen, antiperspirant, ...)
+  if (db === 'food') {
+    if (categories.some((c) => MISFILED_HOUSEHOLD.test(String(c)))) return 'household';
+    if (categories.some((c) => MISFILED_COSMETIC.test(String(c)))) return 'cosmetic';
+    return 'food';
+  }
   if (db === 'beauty') return 'cosmetic';
   if (db === 'products') return categories.some((c) => PERSONAL_CARE_RE.test(String(c))) ? 'cosmetic' : 'household';
   return 'food';
