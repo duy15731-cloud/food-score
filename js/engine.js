@@ -8,7 +8,7 @@
 // Open Food Facts
 // ---------------------------------------------------------------------------------------------
 export const OFF_FIELDS = ['code', 'product_name', 'product_name_en', 'product_name_vi', 'brands', 'quantity',
-  'image_front_url', 'image_front_small_url', 'ingredients_text', 'ingredients_text_en', 'ingredients_text_vi',
+  'image_front_url', 'image_front_small_url', 'image_front_thumb_url', 'image_small_url', 'image_url', 'ingredients_text', 'ingredients_text_en', 'ingredients_text_vi',
   'ingredients', 'allergens_tags', 'traces_tags', 'additives_tags', 'nutriments', 'nova_group',
   'nutriscore_score', 'nutriscore_grade', 'nutriscore', 'categories_tags', 'lang'];
 
@@ -871,8 +871,10 @@ export function analyze(input) {
 
   const allergens = findAllergens({ ingredients, ingredientsText: input.ingredientsText || '', containsText: input.containsText || '', mayContainText: input.mayContainText || '',
     allergenTags: input.allergens || [], traceTags: input.traces || [], additiveCodes: tagCodes });
+  const cancer = cancerCheck({ ingredients, ingredientsText: input.ingredientsText || '', categories: input.categories || [], additiveCodes: tagCodes,
+    productType: 'food', beverage: ns.cat === 'beverage' || cat === 'beverage' });
   return {
-    score, partial, capped, missing, band: score == null ? null : bandFor(score), allergens,
+    score, partial, capped, missing, band: score == null ? null : bandFor(score), allergens, cancer,
     parts: {
       nutrition: { points: nutPoints == null ? null : Math.round(nutPoints * 10) / 10, max: 60, nutriscore: ns },
       additives: { points: addPoints, max: 30, list: additives },
@@ -1122,6 +1124,7 @@ function analyzeNonFood(input, type) {
     allergenTags: input.allergens || [], traceTags: input.traces || [], productType: type });
   return {
     type, score, partial: false, capped, missing: hasText ? [] : ['ingredients'], band: score == null ? null : bandFor(score), allergens,
+    cancer: cancerCheck({ ingredients, ingredientsText: input.ingredientsText || '', categories: input.categories || [], productType: type }),
     parts: { harm: { points: score, list } },
     reasons, eczema, eczemaScore: eczemaScore(eczema), ingredients, nutrients: {}, category: type,
   };
@@ -1329,6 +1332,196 @@ export const allergenSummary = (found) => ({
   t: uniq(found.hits.filter((h) => ['traces', 'maybe'].includes(h.source)).map((h) => h.id)),
   u: !found.hasList,
 });
+
+// ---------------------------------------------------------------------------------------------
+// CANCER-RISK SCORE 0-100 (food AND household / personal care). 100 = no cancer-linked ingredient FOUND.
+// It shows ingredients that an authority has CLASSIFIED as cancer-linked — it does NOT say the product causes
+// cancer: amount, how often, and how you are exposed (eaten / on skin / breathed in) all matter.
+// Authoritative classifications only (checked 2026-10-10):
+//  [IARC]  IARC Monographs: Group 1 = carcinogenic to humans, 2A = probably, 2B = possibly.
+//          processed meat 1 + red meat 2A (vol. 114, 2015); alcoholic beverages / ethanol in them 1 (vol. 96, 100E);
+//          Chinese-style salted fish 1 (vol. 56, 100E); ingested nitrate/nitrite under nitrosating conditions 2A
+//          (vol. 94); aspartame 2B (vol. 134, 2023 — JECFA kept the ADI of 40 mg/kg bw/day the same week);
+//          BHA 2B (vol. 40); potassium bromate 2B (vol. 73); 4-methylimidazole 2B (vol. 101, forms in caramel
+//          colours III/IV = E150c/E150d); titanium dioxide 2B (vol. 93 — for INHALED dust); acrylamide 2A (vol. 60);
+//          formaldehyde 1 (vol. 100F); coal tar 1 (100F); 1,4-dioxane 2B (vol. 71); talc 2A (vol. 136, 2024);
+//          benzophenone 2B (vol. 101); diethanolamine + coconut-oil DEA condensate 2B (vol. 101); crystalline
+//          silica 1 when inhaled (100C); benzene 1 (120); trichloroethylene 1 (106); tetrachloroethylene 2A (106);
+//          dichloromethane 2A (110); naphthalene 2B (82); 1,4-dichlorobenzene 2B (73); glyphosate 2A (112);
+//          methyleugenol 2B (101); safrole 2B (Suppl. 7); Citrus Red No. 2 2B (Suppl. 7).
+//  [P65]   California Proposition 65 list (4-MEI, acrylamide, DEA condensates, benzophenone ...).
+//  [NTP]   US NTP Report on Carcinogens, 15th ed. (formaldehyde, BHA, crystalline silica, trichloroethylene ...).
+//  [EFSA]  EFSA 2021 (EFSA Journal 19:6585): E171 titanium dioxide no longer considered safe as a FOOD additive —
+//          genotoxicity could not be ruled out (EU ban 2022/63). That is a food-only concern.
+//  LEFT OUT on purpose: food-grade carrageenan (NOT classified; only degraded "poligeenan" is IARC 2B and it is not
+//  a food additive); coffee (IARC Group 3; California exempted it 2019); saccharin (IARC Group 3); sucralose;
+//  FD&C / D&C dyes (made from petrochemicals, not classified like coal tar itself); palm-oil glycidyl esters
+//  (a processing contaminant, level unknown per product); titanium dioxide in creams (not inhaled).
+// Weight (points off 100): STRONG (IARC 1 / known) 40 and caps the score at 49; MODERATE (2A / probable) 20;
+// MILD (2B / possible / Prop 65 only) 8. Worst first, each further hit counts 70% of the one before (like the
+// eczema score). No ingredient list = NO score ("?"), never 100.
+// ---------------------------------------------------------------------------------------------
+export const CANCER_SCORE_RULE = { weights: { strong: 40, moderate: 20, mild: 8 }, decay: 0.7, strongCap: 49 };
+const Cx = (id, level, scope, name, why, words, opts = {}) => ({ id, level, scope, name, why, words, not: opts.not || [], re: opts.re || null,
+  additives: opts.additives || [], cats: opts.cats || [], beverageOnly: !!opts.beverageOnly, note: opts.note || null });
+const PROCESSED_MEAT_CATS = ['en:processed-meats', 'en:prepared-meats', 'en:bacon', 'en:bacons', 'en:smoked-bacon', 'en:hams', 'en:sausages', 'en:hot-dogs',
+  'en:frankfurters', 'en:salamis', 'en:cured-meats', 'en:charcuteries', 'en:dried-meats', 'en:jerky', 'en:corned-beef', 'en:pepperoni', 'en:chorizos'];
+const PROCESSED_MEAT_WORDS = ['bacon', 'ham', 'hams', 'salami', 'pepperoni', 'sausage', 'hot dog', 'frankfurter', 'wiener', 'bologna', 'chorizo', 'prosciutto',
+  'pastrami', 'corned beef', 'jerky', 'luncheon meat', 'spam', 'cured meat', 'smoked meat', 'lap cheong', 'xúc xích', 'giăm bông', 'thịt xông khói', 'lạp xưởng', 'chả lụa'];
+const NOT_REAL_MEAT = ['bacon flavor', 'bacon flavour', 'bacon flavored', 'bacon flavoured', 'imitation bacon', 'ham flavor', 'ham flavour', 'meatless', 'plant-based', 'vegetarian', 'vegan', 'meat-free', 'meat free'];
+const NITRITE_CODES = ['e249', 'e250', 'e251', 'e252'];
+const NITRITE_WORDS = ['sodium nitrite', 'potassium nitrite', 'sodium nitrate', 'potassium nitrate', 'nitrite', 'nitrate'];
+const MEAT_WORDS = ['pork', 'beef', 'chicken', 'turkey', 'meat', 'lamb', 'veal', 'mutton', 'thịt'];
+const RED_MEAT_WORDS = ['beef', 'pork', 'lamb', 'mutton', 'veal', 'goat meat', 'venison', 'thịt bò', 'thịt heo', 'thịt lợn', 'thịt cừu'];
+const NOT_RED_MEAT = ['beef extract', 'beef bone extract', 'beef fat', 'beef flavor', 'beef flavour', 'beef broth', 'beef stock', 'beef tallow', 'beef gelatin',
+  'pork fat', 'pork gelatin', 'pork lard', 'pork rind', 'beef bouillon'];
+const hz = (id) => HAZARDS.find((x) => x.id === id);
+export const CARCINOGENS = [
+  // ---- food ----
+  Cx('processed_meat', 'strong', 'food', { en: 'Processed meat (bacon, ham, sausage, hot dog…)', vi: 'Thịt chế biến (thịt xông khói, giăm bông, xúc xích…)' },
+    { en: 'IARC Group 1 — known to cause colorectal cancer; risk rises with the amount eaten (about 18% per 50 g a day)', vi: 'IARC nhóm 1 — đã xác định gây ung thư đại trực tràng; nguy cơ tăng theo lượng ăn (khoảng 18% mỗi 50 g/ngày)' },
+    PROCESSED_MEAT_WORDS, { not: NOT_REAL_MEAT, cats: PROCESSED_MEAT_CATS }),
+  Cx('nitrite', 'moderate', 'food', { en: 'Nitrite / nitrate curing salt (E249–E252)', vi: 'Muối nitrit / nitrat (E249–E252)' },
+    { en: 'IARC 2A — ingested nitrite/nitrate that forms nitrosamines in the body is a probable carcinogen', vi: 'IARC 2A — nitrit/nitrat ăn vào tạo nitrosamin trong cơ thể là chất có thể gây ung thư' },
+    ['sodium nitrite', 'potassium nitrite', 'sodium nitrate', 'potassium nitrate'], { additives: NITRITE_CODES }),
+  Cx('red_meat', 'moderate', 'food', { en: 'Red meat (beef, pork, lamb)', vi: 'Thịt đỏ (bò, heo, cừu)' },
+    { en: 'IARC 2A — probably causes colorectal cancer; the amount eaten matters', vi: 'IARC 2A — có thể gây ung thư đại trực tràng; lượng ăn là quan trọng' },
+    RED_MEAT_WORDS, { not: syn(NOT_RED_MEAT, NOT_REAL_MEAT) }),
+  Cx('alcohol', 'strong', 'food', { en: 'Alcohol (alcoholic drink)', vi: 'Rượu bia (đồ uống có cồn)' },
+    { en: 'IARC Group 1 — ethanol in alcoholic drinks causes several cancers; no safe level has been set', vi: 'IARC nhóm 1 — cồn trong đồ uống gây nhiều loại ung thư; chưa có mức an toàn' },
+    ['alcohol', 'ethanol', 'ethyl alcohol', 'beer', 'wine', 'vodka', 'rum', 'whisky', 'whiskey', 'gin', 'brandy', 'liqueur', 'sake', 'cider', 'rượu', 'bia'],
+    { not: ['alcohol-free', 'alcohol free', 'non-alcoholic', 'dealcoholised', 'dealcoholized', '0.0%', 'sugar alcohol', 'wine vinegar', 'ginger', 'ginseng'], beverageOnly: true,
+      cats: ['en:alcoholic-beverages', 'en:beers', 'en:wines', 'en:spirits', 'en:liqueurs', 'en:ciders'] }),
+  Cx('salted_fish', 'strong', 'food', { en: 'Chinese-style salted fish', vi: 'Cá muối kiểu Trung Hoa' },
+    { en: 'IARC Group 1 — causes nasopharyngeal cancer', vi: 'IARC nhóm 1 — gây ung thư vòm họng' },
+    ['chinese-style salted fish', 'salted fish', 'cá muối']),
+  Cx('aspartame', 'mild', 'food', { en: 'Aspartame (E951)', vi: 'Aspartame (E951)' },
+    { en: 'IARC 2B (2023, limited evidence); JECFA kept the acceptable daily intake (40 mg/kg) unchanged', vi: 'IARC 2B (2023, bằng chứng hạn chế); JECFA giữ nguyên mức ăn hằng ngày chấp nhận được (40 mg/kg)' },
+    ['aspartame', 'aspartam'], { additives: ['e951', 'e962'] }),
+  Cx('bha', 'mild', 'both', { en: 'BHA (butylated hydroxyanisole, E320)', vi: 'BHA (E320)' },
+    { en: 'IARC 2B; "reasonably anticipated" human carcinogen (US NTP); on the Prop 65 list', vi: 'IARC 2B; NTP Mỹ xếp “có thể dự đoán” gây ung thư; có trong danh sách Prop 65' },
+    ['butylated hydroxyanisole', 'bha'], { additives: ['e320'], not: ['bha (salicylic acid)', 'beta hydroxy acid'] }),
+  Cx('bromate', 'mild', 'food', { en: 'Potassium bromate (bromated flour)', vi: 'Kali bromat (bột mì có bromat)' },
+    { en: 'IARC 2B; on the Prop 65 list; banned in the EU, UK, Canada', vi: 'IARC 2B; trong danh sách Prop 65; bị cấm ở EU, Anh, Canada' },
+    ['potassium bromate', 'bromated flour', 'bromated'], { additives: ['e924'] }),
+  Cx('caramel_4mei', 'mild', 'food', { en: 'Caramel colour III/IV (E150c / E150d) — 4-MEI', vi: 'Màu caramel III/IV (E150c / E150d) — 4-MEI' },
+    { en: 'made with ammonia, which leaves 4-methylimidazole (IARC 2B; Prop 65 list); plain caramel (E150a) does not', vi: 'làm bằng amoniac, để lại 4-methylimidazole (IARC 2B; danh sách Prop 65); caramel thường (E150a) thì không' },
+    ['ammonia caramel', 'sulphite ammonia caramel', 'sulfite ammonia caramel', 'caramel color iii', 'caramel color iv', 'caramel colour iii', 'caramel colour iv', '4-methylimidazole', '4-mei'],
+    { additives: ['e150c', 'e150d'] }),
+  Cx('tio2', 'mild', 'food', { en: 'Titanium dioxide in food (E171)', vi: 'Titan dioxit trong thực phẩm (E171)' },
+    { en: 'EFSA 2021: no longer considered safe as a food additive — DNA damage could not be ruled out (banned in the EU since 2022); IARC 2B is for breathing in the dust', vi: 'EFSA 2021: không còn được coi là an toàn làm phụ gia — không loại trừ được tổn thương ADN (EU cấm từ 2022); IARC 2B là khi hít bụi' },
+    ['titanium dioxide'], { additives: ['e171'] }),
+  Cx('acrylamide', 'moderate', 'food', { en: 'Acrylamide (may form during frying / baking)', vi: 'Acrylamide (có thể sinh ra khi chiên / nướng)' },
+    { en: 'IARC 2A, Prop 65 — NOT an ingredient: forms in starchy foods cooked very hot (chips, fries); the amount varies', vi: 'IARC 2A, Prop 65 — KHÔNG phải thành phần: sinh ra khi tinh bột được nấu rất nóng (khoai chiên, snack); lượng thay đổi' },
+    [], { cats: ['en:crisps', 'en:potato-crisps', 'en:chips', 'en:potato-chips', 'en:chips-and-fries', 'en:french-fries', 'en:fries', 'en:frozen-fried-potatoes'] }),
+  Cx('citrus_red2', 'mild', 'food', { en: 'Citrus Red No. 2 (orange peel dye)', vi: 'Phẩm màu Citrus Red 2 (nhuộm vỏ cam)' },
+    { en: 'IARC 2B', vi: 'IARC 2B' }, ['citrus red 2', 'citrus red no. 2', 'citrus red no 2']),
+  Cx('safrole', 'mild', 'both', { en: 'Safrole / sassafras', vi: 'Safrole / xá xị (sassafras)' }, { en: 'IARC 2B; banned as a food flavour in the US and EU', vi: 'IARC 2B; bị cấm làm hương liệu ở Mỹ và EU' }, ['safrole', 'sassafras oil', 'sassafras']),
+  Cx('methyleugenol', 'mild', 'both', { en: 'Methyleugenol', vi: 'Methyleugenol' }, { en: 'IARC 2B; restricted in EU fragrances (Annex III)', vi: 'IARC 2B; bị giới hạn trong hương liệu ở EU' }, ['methyleugenol', 'methyl eugenol']),
+  // ---- household / personal care ----
+  Cx('formaldehyde', 'strong', 'nonfood', { en: 'Formaldehyde', vi: 'Formaldehyde' },
+    { en: 'IARC Group 1 and a known human carcinogen (US NTP) — mainly when breathed in; prohibited in EU cosmetics', vi: 'IARC nhóm 1, NTP Mỹ xác định gây ung thư — chủ yếu khi hít phải; bị cấm trong mỹ phẩm EU' },
+    hz('formaldehyde').words),
+  Cx('fa_releaser', 'strong', 'nonfood', { en: 'Formaldehyde-releasing preservative', vi: 'Chất bảo quản giải phóng formaldehyde' },
+    { en: 'slowly releases formaldehyde (IARC Group 1); the EU requires a "releases formaldehyde" warning (EU 2022/1181) — the amount released is small', vi: 'giải phóng dần formaldehyde (IARC nhóm 1); EU bắt buộc cảnh báo (EU 2022/1181) — lượng giải phóng nhỏ' },
+    hz('fa-releaser').words),
+  Cx('coal_tar', 'strong', 'nonfood', { en: 'Coal tar', vi: 'Hắc ín than đá (coal tar)' },
+    { en: 'IARC Group 1; prohibited in EU cosmetics; still in some US dandruff shampoos', vi: 'IARC nhóm 1; bị cấm trong mỹ phẩm EU; vẫn có trong vài dầu gội trị gàu ở Mỹ' }, ['coal tar', 'coal-tar', 'pix carbonis']),
+  Cx('silica', 'strong', 'nonfood', { en: 'Crystalline silica / quartz (abrasive cleaners)', vi: 'Silica tinh thể / thạch anh (bột cọ rửa)' },
+    { en: 'IARC Group 1 WHEN BREATHED IN as dust — avoid making dust; not a risk on the skin. ("Hydrated silica" in toothpaste is a different, amorphous form)', vi: 'IARC nhóm 1 KHI HÍT bụi — tránh tạo bụi; không nguy hiểm trên da. (“Hydrated silica” trong kem đánh răng là dạng khác)' },
+    ['crystalline silica', 'silica crystalline', 'silica, crystalline', 'quartz', 'cristobalite']),
+  Cx('benzene', 'strong', 'nonfood', { en: 'Benzene', vi: 'Benzen' }, { en: 'IARC Group 1 (leukaemia)', vi: 'IARC nhóm 1 (bệnh bạch cầu)' }, ['benzene'], { not: ['benzene sulfonate', 'benzene sulphonate', 'benzenesulfonate'] }),
+  Cx('tce', 'strong', 'nonfood', { en: 'Trichloroethylene (solvent)', vi: 'Trichloroethylene (dung môi)' }, { en: 'IARC Group 1 (kidney cancer)', vi: 'IARC nhóm 1 (ung thư thận)' }, ['trichloroethylene', 'trichloroethene']),
+  Cx('talc', 'moderate', 'nonfood', { en: 'Talc', vi: 'Bột talc' }, { en: 'IARC 2A (2024) — mainly from long-term genital use and breathing the powder', vi: 'IARC 2A (2024) — chủ yếu khi dùng lâu ở vùng kín và khi hít bột' }, ['talc', 'talcum', 'talcum powder']),
+  Cx('perc', 'moderate', 'nonfood', { en: 'Tetrachloroethylene (perc, spot removers)', vi: 'Tetrachloroethylene (perc, tẩy vết bẩn)' }, { en: 'IARC 2A', vi: 'IARC 2A' }, ['tetrachloroethylene', 'perchloroethylene', 'tetrachloroethene']),
+  Cx('dcm', 'moderate', 'nonfood', { en: 'Dichloromethane (methylene chloride, paint stripper)', vi: 'Dichloromethane (methylene chloride, tẩy sơn)' }, { en: 'IARC 2A', vi: 'IARC 2A' }, ['dichloromethane', 'methylene chloride']),
+  Cx('glyphosate', 'moderate', 'nonfood', { en: 'Glyphosate (weed killer)', vi: 'Glyphosate (thuốc diệt cỏ)' }, { en: 'IARC 2A (2015); the US EPA and EFSA disagree — evidence is contested', vi: 'IARC 2A (2015); EPA Mỹ và EFSA không đồng ý — bằng chứng còn tranh cãi' }, ['glyphosate']),
+  Cx('dioxane', 'mild', 'nonfood', { en: 'Ethoxylated ingredient (PEG / "-eth") — possible 1,4-dioxane traces', vi: 'Thành phần ethoxyl hoá (PEG / “-eth”) — có thể có vết 1,4-dioxane' },
+    { en: '1,4-dioxane is IARC 2B; it is a manufacturing CONTAMINANT that can be left in "-eth"/PEG ingredients, not the ingredient itself', vi: '1,4-dioxane là IARC 2B; là TẠP CHẤT có thể còn sót trong thành phần “-eth”/PEG, không phải bản thân thành phần' },
+    hz('ethoxylated').words, { re: hz('ethoxylated').re }),
+  Cx('dea', 'mild', 'nonfood', { en: 'Diethanolamine / cocamide DEA', vi: 'Diethanolamine / cocamide DEA' }, { en: 'IARC 2B; cocamide DEA is on the Prop 65 list', vi: 'IARC 2B; cocamide DEA trong danh sách Prop 65' }, hz('dea').words, { re: hz('dea').re }),
+  Cx('benzophenone', 'mild', 'nonfood', { en: 'Benzophenone', vi: 'Benzophenone' }, { en: 'IARC 2B; Prop 65 list. (Benzophenone-3 / oxybenzone is a different chemical and is not classified)', vi: 'IARC 2B; danh sách Prop 65. (Benzophenone-3 / oxybenzone là chất khác, chưa được xếp loại)' },
+    ['benzophenone'], { not: ['benzophenone-', ...Array.from({ length: 12 }, (_, i) => `benzophenone ${i + 1}`)] }),
+  Cx('naphthalene', 'mild', 'nonfood', { en: 'Naphthalene (mothballs)', vi: 'Naphthalene (băng phiến)' }, { en: 'IARC 2B', vi: 'IARC 2B' }, ['naphthalene']),
+  Cx('pdcb', 'mild', 'nonfood', { en: 'p-Dichlorobenzene (mothballs, toilet blocks)', vi: 'p-Dichlorobenzene (băng phiến, viên toilet)' }, { en: 'IARC 2B', vi: 'IARC 2B' }, ['p-dichlorobenzene', 'para-dichlorobenzene', '1,4-dichlorobenzene', 'paradichlorobenzene']),
+];
+const CX_BY_ID = Object.fromEntries(CARCINOGENS.map((c) => [c.id, c]));
+// returns null when there is no ingredient list (no score — never 100)
+export function cancerCheck({ ingredients = [], ingredientsText = '', categories = [], additiveCodes = [], productType = 'food', beverage = false } = {}) {
+  const hasList = !!String(ingredientsText || '').trim() || ingredients.length > 0;
+  if (!hasList) return null;
+  const isFood = productType === 'food';
+  const texts = ingredients.length ? ingredients.map((i) => ({ via: i.text, t: norm(`${i.text} ${idWords(i.id)}`) })) : [{ via: '', t: norm(ingredientsText) }];
+  const codes = new Set([...additiveCodes, ...texts.flatMap((x) => eNumbersInText(x.t))]);
+  const found = new Map();
+  const hit = (id, via) => { if (!found.has(id)) found.set(id, via); };
+  for (const c of CARCINOGENS) {
+    if (c.scope === 'food' && !isFood) continue;
+    if (c.scope === 'nonfood' && isFood) continue;
+    const cat = c.cats.find((k) => categories.includes(k));
+    if (cat) { hit(c.id, cat.replace(/^en:/, '').replace(/-/g, ' ')); continue; }
+    if (c.beverageOnly && !beverage) continue;
+    for (const x of texts) {
+      const w = (c.words.length && matchesAny(x.t, c.words, c.not)) || (c.re && c.re.test(stripPhrases(x.t, c.not)) ? 'match' : null);
+      if (w) { hit(c.id, x.via || w); break; }
+    }
+    if (!found.has(c.id)) { const code = c.additives.find((k) => codes.has(k)); if (code) hit(c.id, code.toUpperCase()); }
+  }
+  if (isFood) {
+    // nitrite/nitrate curing + meat = processed meat (IARC 1). Then the curing salt is the reason, not a second hit.
+    const meat = texts.find((x) => matchesAny(x.t, MEAT_WORDS, NOT_REAL_MEAT)) || categories.some((k) => /^en:(meats|pork|beef|poultry|chicken|turkey)/.test(k));
+    const cured = found.has('nitrite') || texts.some((x) => matchesAny(x.t, NITRITE_WORDS, ['nitrite-free', 'no nitrites', 'no added nitrites']));
+    if (!found.has('processed_meat') && meat && cured) hit('processed_meat', found.get('nitrite') || 'nitrite / nitrate curing');
+    if (found.has('processed_meat')) { found.delete('nitrite'); found.delete('red_meat'); }   // red meat is counted inside processed meat
+  }
+  const R = CANCER_SCORE_RULE;
+  const items = [...found.entries()].map(([id, via]) => { const c = CX_BY_ID[id]; return { id, level: c.level, name: c.name, why: c.why, via, base: R.weights[c.level] }; })
+    .sort((a, b) => b.base - a.base);
+  let total = 0;
+  items.forEach((it, k) => { it.penalty = Math.round(it.base * R.decay ** k * 10) / 10; total += it.penalty; });
+  total = Math.round(total * 10) / 10;
+  let score = Math.max(0, Math.round(100 - total));
+  const capped = items.some((it) => it.level === 'strong') && score > R.strongCap;
+  if (capped) score = R.strongCap;
+  return { score, band: bandFor(score), capped, items, total };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Product picture + "Compare prices" (store search links). Nothing is fetched or sent anywhere: these are plain
+// https links the user may tap. Name + brand for every store; the barcode where that store's search accepts a
+// UPC (Walmart, Google Shopping) and the code is a US/Canada UPC (12 digits, or 13 starting with 0).
+// ---------------------------------------------------------------------------------------------
+export const productThumb = (p) => (p && (p.image_front_small_url || p.image_small_url || p.image_front_thumb_url || p.image_front_url || p.image_url)) || '';
+export const productPhoto = (p) => (p && (p.image_front_url || p.image_url || p.image_front_small_url || p.image_small_url)) || '';
+export const STORES = [
+  { id: 'walmart', name: 'Walmart', url: 'https://www.walmart.com/search?q=', upc: true },
+  { id: 'target', name: 'Target', url: 'https://www.target.com/s?searchTerm=' },
+  { id: 'amazon', name: 'Amazon', url: 'https://www.amazon.com/s?k=' },
+  { id: 'kroger', name: 'Kroger', url: 'https://www.kroger.com/search?query=' },
+  { id: 'costco', name: 'Costco', url: 'https://www.costco.com/CatalogSearch?dept=All&keyword=' },
+  { id: 'heb', name: 'H-E-B', url: 'https://www.heb.com/search/?q=' },
+  { id: 'google', name: 'Google Shopping', url: 'https://www.google.com/search?tbm=shop&q=', upc: true },
+];
+// RFC 3986 strict: also encode ! ' ( ) * (encodeURIComponent leaves them)
+export const encodeQuery = (s) => encodeURIComponent(s).replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+export function storeQuery(name = '', brand = '') {
+  const n = String(name || '').replace(/^📷\s*/u, '').replace(/\s+/g, ' ').trim();
+  const b = String(brand || '').split(',')[0].replace(/\s+/g, ' ').trim();     // OFF "brands" can be "Nutella, Ferrero"
+  const q = b && !n.toLowerCase().includes(b.toLowerCase()) ? `${b} ${n}` : n;
+  return q.trim().slice(0, 120);
+}
+// -> [{ id, name, url, by: 'name' | 'barcode' }]; [] when there is nothing to search for
+export function storeLinks({ name = '', brand = '', code = '' } = {}) {
+  const q = storeQuery(name, brand);
+  const digits = String(code || '').replace(/\D/g, '');
+  const usUpc = digits.length === 12 || (digits.length === 13 && digits.startsWith('0')) ? digits.slice(-12) : '';
+  if (!q && !digits) return [];
+  return STORES.map((s) => {
+    const byCode = (s.upc && usUpc) || (!q && digits);
+    const term = byCode ? (s.upc && usUpc ? usUpc : digits) : q;
+    return { id: s.id, name: s.name, url: s.url + encodeQuery(term), by: byCode ? 'barcode' : 'name' };
+  });
+}
 
 // ---------------------------------------------------------------------------------------------
 // Adapters: OFF product -> analyze() input; OCR text -> analyze() input

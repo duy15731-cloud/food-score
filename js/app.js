@@ -142,13 +142,13 @@ function histAdd(item) {
   list = list.slice(0, HIST_MAX);
   for (let i = 0; i < 4; i++) {
     try { localStorage.setItem('fs_hist', JSON.stringify(list)); return; } catch {
-      // storage full: drop the photo text of the oldest half (the scores stay), then retry
-      list = list.map((x, j) => (j > list.length / 2 && x.ocr ? { ...x, ocr: x.ocr.slice(0, 1500) } : x));
+      // storage full: drop the photo text + photo thumbnails of the oldest half (the scores stay), then retry
+      list = list.map((x, j) => (j > list.length / 2 && (x.ocr || x.thumb) ? { ...x, ocr: x.ocr ? x.ocr.slice(0, 1500) : x.ocr, thumb: undefined } : x));
       if (i === 2) list = list.slice(0, Math.ceil(list.length / 2));
     }
   }
 }
-const histEntry = (a, extra) => ({ score: a.score, ecs: a.eczemaScore ? a.eczemaScore.score : null, type: a.type || 'food', ecz: a.eczema.overall,
+const histEntry = (a, extra) => ({ score: a.score, ecs: a.eczemaScore ? a.eczemaScore.score : null, cr: a.cancer ? a.cancer.score : null, type: a.type || 'food', ecz: a.eczema.overall,
   alg: a.allergens ? E.allergenSummary(a.allergens) : null, ...extra });
 // ⚠️ chip in a list row: red = one of MY allergens is in it, amber = may contain / can't confirm
 function algChip(x) {
@@ -159,20 +159,33 @@ function algChip(x) {
   return '';
 }
 const TYPE_ICON = { food: '🍎', cosmetic: '🧴', household: '🧽' };
+// list-row picture: product photo (lazy) or the photo the user took; a broken / missing picture falls back to the emoji
+const rowThumb = (x) => {
+  const src = x.thumb || x.img;
+  return `<span class="hist-thumb" data-emoji="${TYPE_ICON[x.type || 'food']}">${src ? `<img src="${h(src)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : TYPE_ICON[x.type || 'food']}</span>`;
+};
+function wireThumbs(root) {
+  root.querySelectorAll('.hist-thumb img').forEach((img) => {
+    const fail = () => { const sp = img.parentElement; if (sp) sp.textContent = sp.dataset.emoji; };
+    if (img.complete && img.naturalWidth === 0 && img.src) fail(); else img.onerror = fail;
+  });
+}
 const mini = (v, title) => `<span class="mini" title="${h(title)}" style="background:${v == null ? '#9aa0a6' : E.bandFor(v).color}">${v == null ? '<span class="mini-n">?</span>' : `<span class="mini-n">${v}</span><span class="mini-of">/100</span>`}</span>`;
 function histRow(x, i) {
   return `<li><button type="button" class="hist-item" data-i="${i}">
-    <span class="hist-type">${TYPE_ICON[x.type || 'food']}</span>
-    <span class="hist-name">${h(x.name || x.code)}</span>${algChip(x)}
+    ${rowThumb(x)}
+    <span class="hist-text"><span class="hist-name">${h(x.name || x.code)}</span>${x.brand ? `<span class="hist-brand">${h(String(x.brand).split(',').slice(0, 2).join(', '))}</span>` : ''}</span>${algChip(x)}
     <span class="mini-pair"><span class="mini-lab">${h(t((x.type || 'food') === 'food' ? 'scoreHealthShort' : 'scoreHarmShort'))}</span>${mini(x.score, t('scoreHealth'))}
-    <span class="mini-lab">${h(t('scoreEczemaShort'))}</span>${mini(x.ecs, t('scoreEczema'))}</span>
+    <span class="mini-lab">${h(t('scoreEczemaShort'))}</span>${mini(x.ecs, t('scoreEczema'))}
+    <span class="mini-lab">${h(t('scoreCancerShort'))}</span>${mini(x.cr === undefined ? null : x.cr, t('scoreCancer'))}</span>
   </button></li>`;
 }
-function openHist(x, push) { if (x.ocr) showPhotoResult(x.ocr, { push, type: x.type }); else openBarcode(x.code, '', { push }); }
+function openHist(x, push) { if (x.ocr) showPhotoResult(x.ocr, { push, type: x.type, thumb: x.thumb }); else openBarcode(x.code, '', { push }); }
 function renderHistory() {
   const list = histGet();
   $('histList').innerHTML = list.length ? list.slice(0, 8).map(histRow).join('') : `<li class="empty">${h(t('noHistory'))}</li>`;
   $('histList').querySelectorAll('.hist-item').forEach((b) => { b.onclick = () => openHist(histGet()[Number(b.dataset.i)]); });
+  wireThumbs($('histList'));
   $('rankBtn').hidden = !list.length;
 }
 $('clearHist').onclick = () => { localStorage.removeItem('fs_hist'); renderHistory(); };
@@ -191,7 +204,7 @@ function renderRanking() {
     <h2 class="rk-title">📊 ${h(t('myProducts'))}</h2>
     <input id="rkSearch" class="rk-search" type="search" autocomplete="off" placeholder="${h(t('rkSearchPh'))}" value="${h(rk.q)}">
     ${seg('filter', [['all', 'rkAll'], ['food', 'rkFood'], ['nonfood', 'rkNonFood']], rk.filter)}
-    ${seg('sort', [['score', 'rkSortScore'], ['eczema', 'rkSortEczema']], rk.sort)}
+    ${seg('sort', [['score', 'rkSortScore'], ['eczema', 'rkSortEczema'], ['cancer', 'rkSortCancer']], rk.sort)}
     ${seg('dir', [['best', 'rkBest'], ['worst', 'rkWorst']], rk.dir)}
     <p class="muted small" id="rkCount"></p><ul id="rkList" class="rk-list"></ul>`;
   $('rkBack').onclick = goHome;
@@ -204,7 +217,7 @@ function renderRanking() {
 function rankedItems() {
   const all = histGet().map((x, i) => ({ ...x, i }));
   const q = rk.q.trim().toLowerCase();
-  const key = rk.sort === 'eczema' ? 'ecs' : 'score';
+  const key = rk.sort === 'eczema' ? 'ecs' : rk.sort === 'cancer' ? 'cr' : 'score';
   return all.filter((x) => (rk.filter === 'all' || (rk.filter === 'food' ? (x.type || 'food') === 'food' : (x.type || 'food') !== 'food'))
       && (!q || String(x.name || x.code || '').toLowerCase().includes(q)))
     .sort((a, b) => {
@@ -220,6 +233,7 @@ function renderRankList() {
   $('rkCount').textContent = t('rkCount', { n: items.length });
   $('rkList').innerHTML = items.length ? items.map((x) => histRow(x, x.i)).join('') : `<li class="empty">${h(t('rkEmpty'))}</li>`;
   $('rkList').querySelectorAll('.hist-item').forEach((b) => { b.onclick = () => openHist(histGet()[Number(b.dataset.i)], true); });
+  wireThumbs($('rkList'));
 }
 $('rankBtn').onclick = () => { navTo('ranking', true); showRanking(); };
 
@@ -233,7 +247,7 @@ async function openBarcode(raw, format = '', opts = {}) {
   if (res.state === 'found') {
     const analysis = E.analyze(E.inputFromOff(res.product, res.db));
     current = { kind: 'off', product: res.product, code: res.code, db: res.db, analysis, cached: res.cached };
-    histAdd(histEntry(analysis, { code: res.code, name: productName(res.product) }));
+    histAdd(histEntry(analysis, { code: res.code, name: productName(res.product), brand: res.product.brands || '', img: E.productThumb(res.product) }));
   } else {
     current = { kind: res.state, code, tried: res.tried, format, dbStates: res.dbStates };
   }
@@ -258,7 +272,7 @@ function renderCurrent() {
   else if (c.kind === 'photo') html = back + renderAnalysis(c.analysis, { photo: c });
   else if (c.kind === 'notfound') {
     html = back + `<section class="card msg" id="notFoundCard"><h2>${h(t('notFound'))}</h2><p>${h(t('notFoundHelp'))}</p>
-      ${photoActions()}
+      ${photoActions()}${renderPrices({ code: c.code }, true)}
       <p class="muted small">${h(t('barcode'))}: ${h(c.code)} · ${h(t('tried'))}: ${h(c.tried.join(', '))}</p></section>`;
   } else if (c.kind === 'failed') {
     html = back + `<section class="card msg warn"><h2>${h(t('failed'))}</h2>
@@ -355,6 +369,15 @@ function renderAllergies() {
 }
 $('algBtn').onclick = openAllergies;
 
+// "Compare prices": plain https store-search links, opened only when tapped (nothing is fetched or sent)
+function renderPrices(prod, inline = false) {
+  const links = E.storeLinks({ name: prod.name || '', brand: prod.brand || '', code: prod.code || '' });
+  if (!links.length) return '';
+  const body = `<h2>🛒 ${h(t('pricesHead'))}</h2><div class="price-grid">${links.map((l) =>
+    `<a class="price-btn" href="${h(l.url)}" target="_blank" rel="noopener noreferrer" data-store="${l.id}">${h(l.name)}</a>`).join('')}</div>
+    <p class="muted small">${h(t('pricesNote'))}${links.every((l) => l.by === 'barcode') ? ` ${h(t('pricesByCode'))}` : ''}</p>`;
+  return inline ? `<div class="prices-inline" id="pricePanel">${body}</div>` : `<section class="card prices" id="pricePanel">${body}</section>`;
+}
 // 0->100 red-orange-lightgreen-green gauge with a marker at the score, end labels + "Higher = better"
 function scaleBar(score, lowKey, highKey) {
   const pct = Math.max(0, Math.min(100, score));
@@ -382,17 +405,35 @@ function scoreCircles(a) {
       t(food ? 'notEnough' : 'cantCheck'), food ? t('notEnoughWhy') : t('noScoreIngredients'),
       food ? 'healthScaleLow' : 'harmScaleLow', food ? 'healthScaleHigh' : 'harmScaleHigh', food ? 'healthVerdict' : 'harmVerdict')
     + circle('eczemaCircle', t('scoreEczema'), es ? es.score : null, es ? es.band : null, false,
-      t('cantCheck'), t('noScoreIngredients'), 'eczemaScaleLow', 'eczemaScaleHigh', 'ecVerdict');
+      t('cantCheck'), t('noScoreIngredients'), 'eczemaScaleLow', 'eczemaScaleHigh', 'ecVerdict')
+    + circle('cancerCircle', t('scoreCancer'), a.cancer ? a.cancer.score : null, a.cancer ? a.cancer.band : null, false,
+      t('cantCheck'), t('noScoreIngredients'), 'cancerScaleLow', 'cancerScaleHigh', 'cxVerdict');
+}
+// cancer-linked ingredients: what was found, its classification, the points it cost, and the honest caveat
+function renderCancer(cx) {
+  let out = `<section class="card cancer" id="cancerPanel"><h2>🎗 ${h(t('cxHead'))}</h2><p class="cx-caveat">${h(t('cxCaveat'))}</p>`;
+  if (!cx) return out + `<p class="ec-msg unknown">${h(t('cxUnknown'))}</p></section>`;
+  if (!cx.items.length) out += `<p class="ec-msg ok">✓ ${h(t('cxNone'))}</p>`;
+  else out += `<ul class="chips">${cx.items.map((it) => `<li class="chip cx-${it.level}"><div class="chip-top"><b>${h(L(it.name))}</b>
+      <span class="sev">${h(t('cxLvl_' + it.level))}</span><span class="points">−${fmtN(it.penalty)} ${h(t('ecPoints'))}</span></div>
+      <div class="chip-why">${h(L(it.why))}</div>${it.via ? `<div class="muted small">${h(t('cxFoundIn'))}: ${h(it.via)}</div>` : ''}</li>`).join('')}</ul>`;
+  out += `<details class="breakdown" id="cxBreakdown"><summary>${h(t('howScored'))}</summary>
+    <table>${cx.items.map((it) => `<tr><td>${h(L(it.name))} <span class="tag cx-${it.level}">${h(t('cxLvl_' + it.level))}</span></td><td>−${fmtN(it.penalty)}</td></tr>`).join('')}
+    <tr><td><b>${h(t('ecScoreTotal'))}</b></td><td><b>${cx.score}</b></td></tr>
+    ${cx.capped ? `<tr><td colspan="2" class="r-bad">${h(t('cxCap'))}</td></tr>` : ''}</table>
+    <p class="muted small">${h(t('cxRule'))}</p></details></section>`;
+  return out;
 }
 
 function renderAnalysis(a, { product, code, photo, db }) {
   if ((a.type || 'food') !== 'food') return renderNonFood(a, { product, code, photo, db });
   const parts = a.parts;
   const name = product ? productName(product) : t('photoName');
-  const img = product && (product.image_front_small_url || product.image_front_url);
+  const img = product ? E.productPhoto(product) : (photo && photo.thumb) || '';
   let out = `<section class="card score-card">`;
-  out += `<div class="prod">${img ? `<img src="${h(img)}" alt="" class="prod-img" referrerpolicy="no-referrer">` : ''}
-    <div><div class="prod-name">${h(name || code)}</div>${product && product.brands ? `<div class="muted">${h(product.brands)}</div>` : ''}
+  out += `<div class="prod">${img ? `<img src="${h(img)}" alt="" class="prod-img" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
+    <div class="prod-text"><div class="prod-name" id="prodName">${h(name || code)}</div>${product && product.brands ? `<div class="prod-brand">${h(product.brands)}</div>` : ''}
+    ${product && product.quantity ? `<div class="muted small">${h(product.quantity)}</div>` : ''}
     ${code ? `<div class="muted small">${h(t('barcode'))} ${h(code)}</div>` : ''}</div></div>`;
   if (photo) {
     out += `<div class="banner warn">${h(t('photoWarn'))}</div>`;
@@ -411,8 +452,10 @@ function renderAnalysis(a, { product, code, photo, db }) {
     <tr><td>${h(t('processing'))}</td><td>${parts.processing.points == null ? h(t('unknown')) : `${parts.processing.points}/10 · NOVA ${parts.processing.nova}${parts.processing.estimated ? ` (${h(t('estimate'))})` : ''}`}</td></tr>
     ${a.capped ? `<tr><td colspan="2" class="r-bad">${h(t('capped'))}</td></tr>` : ''}</table></details>`;
   out += `</section>`;
+  out += renderPrices(product ? { name, brand: product.brands, code } : { code: photo && photo.barcode });
 
   out += renderEczema(a.eczema, a.eczemaScore, 'food');
+  out += renderCancer(a.cancer);
   out += renderIngredients(a.ingredients, product);
   out += renderAdditives(parts.additives);
   out += photo ? renderPhotoRead(photo) : '';
@@ -422,11 +465,11 @@ function renderAnalysis(a, { product, code, photo, db }) {
 // cosmetics / personal care / household: harmful-ingredients score instead of the nutrition score
 function renderNonFood(a, { product, code, photo, db }) {
   const name = product ? productName(product) : t('photoName');
-  const img = product && (product.image_front_small_url || product.image_front_url);
+  const img = product ? E.productPhoto(product) : (photo && photo.thumb) || '';
   const dbName = db ? (E.DATABASES.find((d) => d.id === db) || {}).name : '';
   let out = `<section class="card score-card">`;
-  out += `<div class="prod">${img ? `<img src="${h(img)}" alt="" class="prod-img" referrerpolicy="no-referrer">` : ''}
-    <div><div class="prod-name">${h(name || code)}</div>${product && product.brands ? `<div class="muted">${h(product.brands)}</div>` : ''}
+  out += `<div class="prod">${img ? `<img src="${h(img)}" alt="" class="prod-img" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
+    <div class="prod-text"><div class="prod-name" id="prodName">${h(name || code)}</div>${product && product.brands ? `<div class="prod-brand">${h(product.brands)}</div>` : ''}
     <div class="type-chip" id="typeChip">${TYPE_ICON[a.type]} ${h(t('type_' + a.type))}${dbName ? ` · ${h(dbName)}` : ''}</div>
     ${code ? `<div class="muted small">${h(t('barcode'))} ${h(code)}</div>` : ''}</div></div>`;
   if (photo) out += `<div class="banner warn">${h(t('photoWarn'))}</div>`;
@@ -436,7 +479,9 @@ function renderNonFood(a, { product, code, photo, db }) {
   }
   out += `<ul class="reasons">${a.reasons.map((r) => `<li class="r-${r.kind}">${h(L(r))}</li>`).join('')}</ul>`;
   out += `<details class="breakdown"><summary>${h(t('breakdown'))}</summary><p class="small">${h(t('harmRule'))}</p></details></section>`;
+  out += renderPrices(product ? { name, brand: product.brands, code } : { code: photo && photo.barcode });
   out += renderEczema(a.eczema, a.eczemaScore, a.type);
+  out += renderCancer(a.cancer);
   out += renderHarm(a.parts.harm);
   out += renderIngredients(a.ingredients, product);
   out += photo ? `<section class="card photo-read" id="photoRead"><h2>${h(t('whatRead'))}</h2>
@@ -673,7 +718,7 @@ async function onPhoto(file) {
     const analysis = E.analyze(E.inputFromOff(res.product, res.db));
     const fp = { state: 'reading', pct: 0, read: null };
     current = { kind: 'off', product: res.product, code: res.code, db: res.db, analysis, cached: res.cached, fromPhoto: fp };
-    histAdd(histEntry(analysis, { code: res.code, name: productName(res.product) }));
+    histAdd(histEntry(analysis, { code: res.code, name: productName(res.product), brand: res.product.brands || '', img: E.productThumb(res.product) }));
     window.__lastResult = current;
     busy(false);
     renderCurrent(); navTo('result'); showResultView();
@@ -696,20 +741,28 @@ async function onPhoto(file) {
     const read = await readLabel(src, step);
     window.__photoTimings = { ...T, ...read.timings, totalMs: Math.round(performance.now() - T.start), probes: read.probes, rotation: read.rotation, quality: read.quality };
     busy(false);
-    showPhotoResult(read.text, { rotation: read.rotation, barcode: bc && bc.text, barcodeState: res && res.state });
+    showPhotoResult(read.text, { rotation: read.rotation, barcode: bc && bc.text, barcodeState: res && res.state, thumb: makeThumb(src, read.rotation) });
   } catch (err) {
     console.warn('OCR failed', err);
     busy(false);
     showPhotoResult('', { error: 'ocr', barcode: bc && bc.text, barcodeState: res && res.state });
   }
 }
+// small JPEG data URL for "My products" (kept under ~15 KB; the full photo is never stored)
+function makeThumb(src, deg = 0) {
+  try {
+    const cv = drawRotated(src, deg, 120);
+    for (const q of [0.7, 0.5, 0.35]) { const u = cv.toDataURL('image/jpeg', q); if (u.length < 15000) return u; }
+  } catch (err) { console.warn('thumb', err); }
+  return '';
+}
 function showPhotoResult(text, meta = {}) {
   const { input, facts, label, per100, outcome } = E.inputFromOcr(text);
   const analysis = E.analyze(input);
-  current = { kind: 'photo', text, facts, label, per100, analysis, outcome, rotation: meta.rotation || 0, barcode: meta.barcode || '', barcodeState: meta.barcodeState || '', push: !!meta.push };
+  current = { kind: 'photo', text, facts, label, per100, analysis, outcome, rotation: meta.rotation || 0, barcode: meta.barcode || '', barcodeState: meta.barcodeState || '', push: !!meta.push, thumb: meta.thumb || '' };
   window.__lastResult = current;
   if (outcome !== 'unreadable') {
-    histAdd(histEntry(analysis, { code: '', name: `📷 ${label.ingredients.slice(0, 40) || t('photoName')}`, ocr: text.slice(0, 4000) }));
+    histAdd(histEntry(analysis, { code: '', name: `📷 ${label.ingredients.slice(0, 60) || t('photoName')}`, ocr: text.slice(0, 4000), thumb: meta.thumb || '' }));
   }
   renderCurrent();
   navTo('result', meta.push);
