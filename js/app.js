@@ -3,6 +3,7 @@ import * as E from './engine.js';
 import { STR } from './i18n.js';
 import { initTracker } from './tracker.js';
 import { CONFIG } from './config.js';
+import { mountLivePrices, PRICE_STRINGS, getSavedZip, saveZip, cleanZip } from './prices.js';
 
 const $ = (id) => document.getElementById(id);
 const VERSION = self.APP_VERSION || 'dev';
@@ -130,11 +131,64 @@ async function lookup(code, format = '') {
 // ------------------------------------------------------------------ product pictures: database by barcode, else the extra source
 // The Open*Facts picture comes with the product. When there is none (or the code is in no database), ask the extra
 // sources from engine.js (our Cloudflare Worker, CONFIG.WORKER_URL) — a no-op until that URL is set.
-async function productImageFallback(code) {
-  for (const url of E.extraImageSources(code, { workerUrl: CONFIG.WORKER_URL })) {
-    try { const r = await fetch(url); if (r.ok) { const img = E.pickWorkerImage(await r.json().catch(() => null)); if (img) return img; } } catch { /* no picture: emoji */ }
+const workerMemo = new Map();
+function workerProduct(code) {
+  const url = E.workerProductUrl(CONFIG.WORKER_URL, code);
+  if (!url) return Promise.resolve(null);
+  if (!workerMemo.has(url)) {
+    workerMemo.set(url, (async () => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 9000);
+      try { const r = await fetch(url, { signal: ctrl.signal, credentials: 'omit' }); const b = await r.json().catch(() => null); return r.ok ? b : null; }
+      catch { workerMemo.delete(url); return null; }   // network trouble: may ask again later
+      finally { clearTimeout(timer); }
+    })());
   }
-  return '';
+  return workerMemo.get(url);
+}
+async function productImageFallback(code) { return E.pickWorkerImage(await workerProduct(code)); }
+// After the result is on screen: fill the gaps the databases left (ingredients / picture / name) from the worker,
+// or turn "not found" into a product. Never blocks the result; any failure or the daily limit = nothing changes.
+async function enhanceFromWorker(res, push) {
+  if (!CONFIG.WORKER_URL || !E.needsWorker(res)) return;
+  const code = res.code;
+  const w = await workerProduct(code);
+  const m = E.mergeWorkerProduct(res, w, code);
+  window.__lastWorker = { code, asked: true, used: m ? m.worker : [], answer: w ? { title: w.title || null, manufacturer: !!(w.manufacturer && w.manufacturer.found), skipped: w.skipped || null } : null };
+  if (!m) return;
+  cachePut(m.code, m.product, m.db);
+  const analysis = E.analyze(E.inputFromOff(m.product, m.db));
+  histAdd(histEntry(analysis, { code: m.code, name: productName(m.product), brand: m.product.brands || '', img: E.productThumb(m.product) }));
+  if (current && (current.code === code || current.code === m.code) && (current.kind === 'off' || current.kind === 'notfound')) {
+    current = { kind: 'off', product: m.product, code: m.code, db: m.db, analysis, push: current.push, fromPhoto: current.fromPhoto, buzzed: current.buzzed };
+    window.__lastResult = current;
+    if (!$('result').hidden) renderCurrent();
+  }
+}
+// live prices: one request per product + ZIP per session, however often the result is re-drawn
+const priceMemo = new Map();
+const memoFetch = (url, opts) => {
+  if (!priceMemo.has(url)) {
+    priceMemo.set(url, fetch(url, opts).then(async (r) => ({ ok: r.ok, status: r.status, body: await r.json().catch(() => null) }))
+      .catch((e) => { priceMemo.delete(url); throw e; }));
+  }
+  return priceMemo.get(url).then((x) => ({ ok: x.ok, status: x.status, json: async () => x.body }));
+};
+const livePricesSlot = (upc, name, brand) => (CONFIG.WORKER_URL && upc ? `<div class="live-prices" id="livePrices" data-upc="${h(upc)}" data-name="${h(name || '')}" data-brand="${h(String(brand || '').split(',')[0])}"></div>` : '');
+function mountPrices() {
+  const el = $('livePrices');
+  if (!el) return;
+  mountLivePrices(el, { upc: el.dataset.upc, name: el.dataset.name, brand: el.dataset.brand }, { workerUrl: CONFIG.WORKER_URL, strings: PRICE_STRINGS[lang] || PRICE_STRINGS.en, lang, fetchImpl: memoFetch });
+}
+// where the ingredient list / name / picture came from, when not from Open*Facts
+function sourceNotes(product) {
+  if (!product) return '';
+  let out = '';
+  if (product.ingredients_source === 'fda') out += `<div class="banner info src-note" id="fdaSource">${h(t('fdaSource'))}</div>`;
+  if (product.ingredients_source === 'manufacturer') out += `<div class="banner info src-note" id="srcMaker">${h(t('srcMaker', { who: product.ingredients_source_name || 'SmartLabel' }))}</div>`;
+  if (product.ingredients_source === 'upcitemdb') out += `<div class="banner info src-note" id="srcUpc">${h(t('srcUpcIngr'))}</div>`;
+  if (product.name_source === 'upcitemdb' || product.image_source === 'upcitemdb') out += `<div class="banner info src-note" id="srcUpcName">${h(t('srcUpcName'))}</div>`;
+  return out;
 }
 const imgAsked = new Set();
 async function fillImage(code) {
@@ -314,8 +368,8 @@ async function openBarcode(raw, format = '', opts = {}) {
   }
   current.push = !!opts.push;
   window.__lastResult = current;   // for automated checks
-  if ((res.state === 'found' && !E.productThumb(res.product)) || res.state === 'notfound') fillImage(current.code);
   renderCurrent();
+  enhanceFromWorker(res);
   navTo('result', opts.push);
   showResultView();
 }
@@ -334,7 +388,7 @@ function renderCurrent() {
   else if (c.kind === 'photo') html = back + renderAnalysis(c.analysis, { photo: c });
   else if (c.kind === 'notfound') {
     html = back + `<section class="card msg" id="notFoundCard">${c.fallbackImg ? `<img src="${h(c.fallbackImg)}" alt="" class="prod-img" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}<h2>${h(t('notFound'))}</h2><p>${h(t('notFoundHelp'))}</p>
-      ${photoActions()}${renderPrices({ code: c.code }, true)}
+      ${photoActions()}${renderPrices({ code: c.code }, true)}${livePricesSlot(c.code)}
       <p class="muted small">${h(t('barcode'))}: ${h(c.code)} · ${h(t('tried'))}: ${h(c.tried.join(', '))}</p></section>`;
   } else if (c.kind === 'failed') {
     html = back + `<section class="card msg warn"><h2>${h(t('failed'))}</h2>
@@ -342,6 +396,7 @@ function renderCurrent() {
   }
   $('result').innerHTML = html;
   TR.wireAte();
+  mountPrices();
   $('backBtn').onclick = goHome;
   $('algGear').onclick = openAllergies;
   const ab = $('algBannerEdit'); if (ab) ab.onclick = openAllergies;
@@ -452,11 +507,15 @@ function renderSettings() {
     <h2 class="rk-title">⚙ ${h(t('settings'))}</h2>
     ${row('setAlg', '⚠️', t('algTitle'), n ? t('algSetN', { n }) : t('algSetNone'))}
     ${SETTINGS_ROWS.map((r) => row(r.id, r.icon, t(r.key), r.sub ? r.sub() : '')).join('')}
+    ${CONFIG.WORKER_URL ? `<h3 class="set-h">${h(t('zipHead'))}</h3><form class="zip-form" id="zipForm"><input id="zipIn" inputmode="numeric" autocomplete="postal-code" maxlength="10" placeholder="${h(t('zipPh'))}" value="${h(getSavedZip() || '')}">
+      <button type="submit" class="go">${h(t('zipSave'))}</button></form><p class="muted small" id="zipMsg">${h(t('zipHint'))}</p>` : ''}
     <h3 class="set-h">${h(t('unitsHead'))}</h3>
     ${seg('units', [['us', 'unitsUs'], ['metric', 'unitsMetric']], unitsGet())}
     <p class="muted small">${h(t('unitsNote'))}</p>`;
   $('setBack').onclick = goHome;
   $('setAlg').onclick = openAllergies;
+  const zf = $('zipForm');
+  if (zf) zf.onsubmit = (e) => { e.preventDefault(); const z = cleanZip($('zipIn').value); $('zipMsg').textContent = z ? `✓ ${t('zipSaved', { zip: saveZip(z) })}` : t('zipBad'); if (z) $('zipIn').value = z; };
   SETTINGS_ROWS.forEach((r) => { $(r.id).onclick = r.open; });
   $('settings').querySelectorAll('.seg[data-group=units] .seg-opt').forEach((b) => { b.onclick = () => { unitsSet(b.dataset.v); renderSettings(); TR.onRender(); }; });
 }
@@ -534,6 +593,7 @@ function renderAnalysis(a, { product, code, photo, db }) {
     if (photo.barcode && photo.barcodeState === 'failed') out += `<div class="banner info">${h(t('bcLookupFailed', { code: photo.barcode }))}</div>`;
     if (photo.outcome === 'ingredients_only') out += `<div class="banner info" id="noFactsMsg">${h(t('photoNoFacts'))}</div>`;
   }
+  out += sourceNotes(product);
   out += `<div class="score-row">${scoreCircles(a)}</div>`;
   if (a.score == null && photo && photo.outcome !== 'ingredients_only') out += `<p class="explain">${h(t('photoNoScore'))}</p>`;
   if (a.score != null && a.partial) out += `<div class="banner warn">${h(t('partialWarn'))}${a.missing.map((m) => h(t('miss_' + m))).join(', ')}</div>`;
@@ -547,6 +607,7 @@ function renderAnalysis(a, { product, code, photo, db }) {
   out += `</section>`;
   out += TR.ateCard({ key: current, name: name || (photo ? t('photoName') : code), code: code || (photo && photo.barcode) || '', product, photo });
   out += renderPrices(product ? { name, brand: product.brands, code } : { code: photo && photo.barcode });
+  out += livePricesSlot(code || (photo && photo.barcode), product ? name : '', product && product.brands);
 
   out += renderEczema(a.eczema, a.eczemaScore, 'food');
   out += renderCancer(a.cancer);
@@ -560,14 +621,14 @@ function renderAnalysis(a, { product, code, photo, db }) {
 function renderNonFood(a, { product, code, photo, db }) {
   const name = product ? productName(product) : t('photoName');
   const img = (product && E.productPhoto(product)) || (current && current.fallbackImg) || '';
-  const dbName = db ? ([...E.DATABASES, E.FDA_SOURCE].find((d) => d.id === db) || {}).name : '';
+  const dbName = product && product.worker_only ? t('srcWorkerOnly') : db ? ([...E.DATABASES, E.FDA_SOURCE].find((d) => d.id === db) || {}).name : '';
   let out = `<section class="card score-card">`;
   out += `<div class="prod">${img ? `<img src="${h(img)}" alt="" class="prod-img" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
     <div class="prod-text"><div class="prod-name" id="prodName">${h(name || code)}</div>${product && product.brands ? `<div class="prod-brand">${h(product.brands)}</div>` : ''}
     <div class="type-chip" id="typeChip">${TYPE_ICON[a.type]} ${h(t('type_' + a.type))}${dbName ? ` · ${h(dbName)}` : ''}</div>
     ${code ? `<div class="muted small">${h(t('barcode'))} ${h(code)}</div>` : ''}</div></div>`;
   if (photo) out += `<div class="banner warn">${h(t('photoWarn'))}</div>`;
-  if (product && product.ingredients_source === 'fda') out += `<div class="banner info" id="fdaSource">${h(t('fdaSource'))}</div>`;
+  out += sourceNotes(product);
   out += `<div class="score-row">${scoreCircles(a)}</div>`;
   if (a.score == null) {
     out += `<div class="banner info" id="noIngMsg">${h(t('nfNoIngredients'))}</div>${photoActions()}`;
@@ -575,6 +636,7 @@ function renderNonFood(a, { product, code, photo, db }) {
   out += `<ul class="reasons">${a.reasons.map((r) => `<li class="r-${r.kind}">${h(L(r))}</li>`).join('')}</ul>`;
   out += `<details class="breakdown"><summary>${h(t('breakdown'))}</summary><p class="small">${h(t('harmRule'))}</p></details></section>`;
   out += renderPrices(product ? { name, brand: product.brands, code } : { code: photo && photo.barcode });
+  out += livePricesSlot(code || (photo && photo.barcode), product ? name : '', product && product.brands);
   out += renderEczema(a.eczema, a.eczemaScore, a.type);
   out += renderCancer(a.cancer);
   out += renderHarm(a.parts.harm);
@@ -814,9 +876,9 @@ async function onPhoto(file) {
     const fp = { state: 'reading', pct: 0, read: null };
     current = { kind: 'off', product: res.product, code: res.code, db: res.db, analysis, cached: res.cached, fromPhoto: fp };
     histAdd(histEntry(analysis, { code: res.code, name: productName(res.product), brand: res.product.brands || '', img: E.productThumb(res.product) }));
-    if (!E.productThumb(res.product)) fillImage(res.code);
     window.__lastResult = current;
     busy(false);
+    enhanceFromWorker(res);
     renderCurrent(); navTo('result'); showResultView();
     const mine = current;
     try {

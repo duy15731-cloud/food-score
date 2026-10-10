@@ -355,3 +355,15 @@ td.r-bad { color: var(--red); font-weight: 700; }
 .tr-links .set-row { font-size: 20px; font-weight: 700; min-height: 64px; }
 .plate { background: #e8f5ec; border-radius: 12px; padding: 12px; }
 .ate h2 { margin-bottom: 6px; }
+
+/* ---- v1.9 live prices card (prices.js) at app font sizes + Settings ZIP ---- */
+.live-prices .fs-prices { background: #fff; border: 0; border-radius: 18px; padding: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.07); font-size: 17px; }
+.live-prices .fs-prices h3 { font-size: 21px; }
+.live-prices .fs-prices .fs-sub, .live-prices .fs-prices .fs-note { font-size: 15px; }
+.live-prices .fs-prices .fs-price { font-size: 20px; }
+.live-prices .fs-prices input { font-size: 20px; padding: 10px 12px; width: 7em; border: 2px solid #c8ccc9; border-radius: 12px; }
+.live-prices .fs-prices button { min-height: 48px; font-size: 18px; font-weight: 700; border-radius: 12px; border: 2px solid var(--green); background: #fff; color: var(--green); padding: 8px 14px; }
+.live-prices .fs-prices a { min-height: 44px; display: inline-flex; align-items: center; }
+.zip-form { display: flex; gap: 8px; }
+.zip-form input { font-size: 22px; padding: 12px; width: 7em; border: 2px solid #c8ccc9; border-radius: 14px; }
+.src-note { font-weight: 600; }

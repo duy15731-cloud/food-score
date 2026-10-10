@@ -2,7 +2,7 @@
 // The cache name comes from version.js (the ONE version constant) — a new version = a new cache.
 importScripts('./version.js');
 const CACHE = 'food-score-' + self.APP_VERSION;
-const SHELL = ['./', './index.html', './version.js', './manifest.json', './css/app.css', './js/app.js', './js/engine.js', './js/i18n.js', './js/diet.js', './js/tracker.js', './js/config.js',
+const SHELL = ['./', './index.html', './version.js', './manifest.json', './css/app.css', './js/app.js', './js/engine.js', './js/i18n.js', './js/diet.js', './js/tracker.js', './js/config.js', './js/prices.js',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png', './icons/favicon-32.png',
   './vendor/zxing/zxing-reader.js', './vendor/zxing/zxing_reader.wasm'];
 

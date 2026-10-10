@@ -121,6 +121,8 @@ export async function lookupProduct(raw, { fetchJson, format = '' } = {}) {
       }
     }
   }
+  // a database that could not be asked is not an answer of "no such product": say we could not check
+  if (!hit && state === 'notfound' && fda === 'failed') state = 'failed';
   return hit ? { state: 'found', ...hit, tried: cands, via, fda } : { state, tried: cands, via, fda };
 }
 
@@ -513,7 +515,7 @@ export const ECZEMA_CONTACT = [
     ['lanolin', 'lanolin alcohol', 'wool alcohol', 'wool wax', 'adeps lanae', 'eucerit']),
   E('c_quats', 'medium', { en: 'Quaternary ammonium disinfectant (benzalkonium…)', vi: 'Chất khử khuẩn amoni bậc bốn (benzalkonium…)' },
     { en: 'skin irritant and occasional allergen in disinfectant sprays/wipes', vi: 'gây kích ứng da, đôi khi gây dị ứng, trong xịt/khăn khử khuẩn' },
-    ['benzalkonium chloride', 'benzethonium chloride', 'didecyldimethylammonium chloride', 'alkyl dimethyl benzyl ammonium chloride', 'quaternary ammonium', 'cetrimonium chloride']),
+    ['benzalkonium chloride', 'benzethonium chloride', 'didecyldimethylammonium chloride', 'alkyl dimethyl benzyl ammonium chloride', 'quaternary ammonium', 'cetrimonium chloride', 'dimethyl benzyl ammonium', 'dimethylbenzyl ammonium', 'dimethylbenzylammonium', 'dimethyl ethylbenzyl ammonium', 'didecyl dimethyl ammonium', 'dioctyl dimethyl ammonium', 'octyl decyl dimethyl ammonium']),
   E('c_ammonia', 'medium', { en: 'Ammonia', vi: 'Amoniac' },
     { en: 'irritates skin and airways; harsh cleaners worsen hand eczema (NEA)', vi: 'kích ứng da và đường thở; chất tẩy rửa mạnh làm chàm tay nặng hơn (NEA)' },
     ['ammonia', 'ammonium hydroxide', 'amoniac']),
@@ -1149,7 +1151,7 @@ export const HAZARDS = [
     ['ammonia', 'ammonium hydroxide']),
   Hz('quats', 'medium', { en: 'Quat disinfectant (benzalkonium chloride…)', vi: 'Chất khử khuẩn “quat” (benzalkonium chloride…)' },
     { en: 'skin irritant and recognised asthma trigger (AOEC asthmagen list)', vi: 'gây kích ứng da và là tác nhân gây hen đã được ghi nhận (danh sách AOEC)' },
-    ['benzalkonium chloride', 'benzethonium chloride', 'didecyldimethylammonium chloride', 'alkyl dimethyl benzyl ammonium chloride', 'quaternary ammonium']),
+    ['benzalkonium chloride', 'benzethonium chloride', 'didecyldimethylammonium chloride', 'alkyl dimethyl benzyl ammonium chloride', 'quaternary ammonium', 'dimethyl benzyl ammonium', 'dimethylbenzyl ammonium', 'dimethylbenzylammonium', 'dimethyl ethylbenzyl ammonium', 'didecyl dimethyl ammonium', 'dioctyl dimethyl ammonium', 'octyl decyl dimethyl ammonium']),
   // --- LOW ---
   Hz('frag-allergen', 'low', { en: 'Labelled fragrance allergen (limonene, linalool…)', vi: 'Chất gây dị ứng hương liệu có ghi (limonene, linalool…)' },
     { en: 'allergenic mainly once oxidised by air; EU requires them on the label above a small amount (SCCS/1459/11)', vi: 'gây dị ứng chủ yếu khi bị ôxy hoá; EU bắt buộc ghi nhãn khi vượt mức nhỏ (SCCS/1459/11)' },
@@ -1618,6 +1620,55 @@ export function extraImageSources(code, { workerUrl = '' } = {}) {
   const c = String(code || '').replace(/\D/g, '');
   if (!c || !workerUrl) return [];
   return [`${String(workerUrl).replace(/\/+$/, '')}/product?upc=${c}`];
+}
+export const workerProductUrl = (base, code) => extraImageSources(code, { workerUrl: base })[0] || '';
+// Ask the worker ONLY when the databases left a gap: code in no database, or a product with no ingredient list / no picture.
+export const needsWorker = (r) => !!r && (r.state === 'notfound' || (r.state === 'found' && (!pickIngredientText(r.product || {}).trim() || !productThumb(r.product))));
+const MAKER_LABEL = { pg_smartlabel: 'P&G SmartLabel', pg: 'P&G SmartLabel', unilever_smartlabel: 'Unilever SmartLabel', reckitt_smartlabel: 'Reckitt SmartLabel' };
+// what kind of product a worker-only answer is: retail category first, then the ingredient words, else household
+export function workerDbOf(w, ingredientsText = '') {
+  const cat = String((w && w.category) || '').toLowerCase();
+  if (/\b(food|foods|beverages?|grocery|snacks?|candy|drinks?|coffee|tea)\b/.test(cat)) return 'food';
+  if (/health|beauty|personal care|cosmetic|bath|hair|skin|oral care|deodorant|shav|baby/.test(cat)) return 'beauty';
+  if (/household|clean|laundry|home|kitchen|dish/.test(cat)) return 'products';
+  // no category: the maker's site and the product name decide before the ingredient words (a disinfectant spray
+  // lists "fragrance" too). Reckitt's US SmartLabel pages are its household brands (Lysol, Finish, Air Wick...).
+  const name = String((w && (w.title || (w.manufacturer && w.manufacturer.product_name))) || '').toLowerCase();
+  if (/disinfect|clean|detergent|bleach|laundry|dish|wipes|air freshener|deodori[sz]er spray/.test(name)) return 'products';
+  if (/reckitt/.test(String((w && w.manufacturer && w.manufacturer.source) || ''))) return 'products';
+  const g = ingredientsText ? guessProductTypeFromText(ingredientsText) : 'food';
+  return g === 'cosmetic' ? 'beauty' : 'products';
+}
+// Fill ONLY the gaps of a lookup result from the worker's /product answer:
+//   ingredients: the manufacturer's own label list (SmartLabel, label order) first, else UPCitemdb's description text;
+//   picture: the worker's first https image; name / brand: when the databases had none.
+// A code no database has becomes a product when the worker knows it. Returns null when nothing was added.
+export function mergeWorkerProduct(r, w, code) {
+  if (!w || typeof w !== 'object') return null;
+  const m = w.manufacturer;
+  const mf = m && m.found && Array.isArray(m.ingredients) && m.ingredients.length ? m : null;
+  const mfText = mf ? mf.ingredients.map((i) => String((i && (i.name || i)) || '').trim()).filter(Boolean).join(', ') : '';
+  const upText = typeof w.ingredients === 'string' ? w.ingredients.trim() : '';
+  const img = pickWorkerImage(w);
+  const title = (typeof w.title === 'string' && w.title.trim()) || (mf && String(mf.product_name || '').replace(/^\s*smartlabel\s*[-–:]\s*/i, '').replace(/®/g, '').replace(/\b(\w+)\s+\1\b/gi, '$1').trim()) || '';
+  const brand = typeof w.brand === 'string' ? w.brand.trim() : '';
+  const found = r && r.state === 'found' && r.product;
+  const p = found ? { ...r.product } : { code: String(code || '') };
+  const used = [];
+  if (!pickIngredientText(p).trim() && (mfText || upText)) {
+    p.ingredients_text = mfText || upText;
+    p.ingredients_source = mfText ? 'manufacturer' : 'upcitemdb';
+    p.ingredients_source_name = mfText ? (MAKER_LABEL[mf.source] || 'SmartLabel') : 'UPCitemdb';
+    used.push('ingredients');
+  }
+  if (!productThumb(p) && img) { p.image_front_url = img; p.image_source = 'upcitemdb'; used.push('image'); }
+  if (!(p.product_name || p.product_name_en) && title) { p.product_name = title; p.name_source = 'upcitemdb'; used.push('name'); }
+  if (!p.brands && brand) p.brands = brand;
+  if (!used.length) return null;
+  if (found) return { ...r, product: p, worker: used };
+  if (!p.ingredients_text && !p.product_name) return null;
+  p.worker_only = true;   // in no Open*Facts database: the page must not name one as the source
+  return { state: 'found', code: String(code || ''), product: p, db: workerDbOf(w, p.ingredients_text || ''), worker: used, tried: (r && r.tried) || [String(code || '')] };
 }
 // The worker answers {images: [...], title, brand}: use the first https picture (never http / data: / anything else).
 export const pickWorkerImage = (json) => ((json && Array.isArray(json.images) ? json.images : []).find((u) => typeof u === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(u))) || '';
