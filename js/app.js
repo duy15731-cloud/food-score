@@ -146,7 +146,7 @@ function histAdd(item) {
 }
 const histEntry = (a, extra) => ({ score: a.score, ecs: a.eczemaScore ? a.eczemaScore.score : null, type: a.type || 'food', ecz: a.eczema.overall, ...extra });
 const TYPE_ICON = { food: '🍎', cosmetic: '🧴', household: '🧽' };
-const mini = (v, title) => `<span class="mini" title="${h(title)}" style="background:${v == null ? '#9aa0a6' : E.bandFor(v).color}">${v == null ? '?' : v}</span>`;
+const mini = (v, title) => `<span class="mini" title="${h(title)}" style="background:${v == null ? '#9aa0a6' : E.bandFor(v).color}">${v == null ? '<span class="mini-n">?</span>' : `<span class="mini-n">${v}</span><span class="mini-of">/100</span>`}</span>`;
 function histRow(x, i) {
   return `<li><button type="button" class="hist-item" data-i="${i}">
     <span class="hist-type">${TYPE_ICON[x.type || 'food']}</span>
@@ -257,18 +257,34 @@ function renderCurrent() {
   const sb = $('sortBtn'); if (sb) sb.onclick = () => { sortWorst = !sortWorst; renderCurrent(); };
 }
 
-function circle(id, title, score, band, partial, unknownText) {
+// 0->100 red-orange-lightgreen-green gauge with a marker at the score, end labels + "Higher = better"
+function scaleBar(score, lowKey, highKey) {
+  const pct = Math.max(0, Math.min(100, score));
+  return `<div class="scale-bar"><div class="scale-track"><div class="scale-marker" style="left:${pct}%"></div></div>
+    <div class="scale-ends"><span>${h(t(lowKey))}</span><span>${h(t(highKey))}</span></div>
+    <div class="scale-dir">${h(t('higherBetter'))}</div></div>`;
+}
+function circle(id, title, score, band, partial, unknownShort, unknownLong, lowKey, highKey, verdictPrefix) {
   const head = `<div class="circle-title">${h(title)}</div>`;
-  if (score == null) return `<div class="score-col">${head}<div class="circle unknown" id="${id}"><span class="num">?</span></div><div class="band" style="color:#5f6368">${h(unknownText)}</div></div>`;
+  if (score == null) {
+    return `<div class="score-col">${head}<div class="circle unknown" id="${id}"><span class="num">?</span></div>
+      <div class="band" style="color:#5f6368">${h(unknownShort)}</div><p class="score-explain">${h(unknownLong)}</p></div>`;
+  }
+  const verdict = t(`${verdictPrefix}_${band.key}`);
   return `<div class="score-col">${head}<div class="circle${partial ? ' partial' : ''}" id="${id}" style="--c:${band.color}"><span class="num">${score}</span><span class="of">/100</span></div>
-    <div class="band" style="color:${band.color}">${h(L(band.label))}</div></div>`;
+    <div class="band" style="color:${band.color}">${h(L(band.label))}</div>
+    ${scaleBar(score, lowKey, highKey)}
+    <p class="score-verdict">${h(verdict)}</p></div>`;
 }
 // TWO numbers side by side: health (food) or harmful-ingredients (non-food), and eczema
 function scoreCircles(a) {
   const food = (a.type || 'food') === 'food';
   const es = a.eczemaScore;
-  return circle('scoreCircle', t(food ? 'scoreHealth' : 'scoreHarm'), a.score, a.band, a.partial, t(food ? 'notEnough' : 'cantCheck'))
-    + circle('eczemaCircle', t('scoreEczema'), es ? es.score : null, es ? es.band : null, false, t('cantCheck'));
+  return circle('scoreCircle', t(food ? 'scoreHealth' : 'scoreHarm'), a.score, a.band, a.partial,
+      t(food ? 'notEnough' : 'cantCheck'), food ? t('notEnoughWhy') : t('noScoreIngredients'),
+      food ? 'healthScaleLow' : 'harmScaleLow', food ? 'healthScaleHigh' : 'harmScaleHigh', food ? 'healthVerdict' : 'harmVerdict')
+    + circle('eczemaCircle', t('scoreEczema'), es ? es.score : null, es ? es.band : null, false,
+      t('cantCheck'), t('noScoreIngredients'), 'eczemaScaleLow', 'eczemaScaleHigh', 'ecVerdict');
 }
 
 function renderAnalysis(a, { product, code, photo, db }) {
@@ -287,7 +303,7 @@ function renderAnalysis(a, { product, code, photo, db }) {
     if (photo.outcome === 'ingredients_only') out += `<div class="banner info" id="noFactsMsg">${h(t('photoNoFacts'))}</div>`;
   }
   out += `<div class="score-row">${scoreCircles(a)}</div>`;
-  if (a.score == null && !(photo && photo.outcome === 'ingredients_only')) out += `<p class="explain">${h(photo ? t('photoNoScore') : t('notEnoughWhy'))}</p>`;
+  if (a.score == null && photo && photo.outcome !== 'ingredients_only') out += `<p class="explain">${h(t('photoNoScore'))}</p>`;
   if (a.score != null && a.partial) out += `<div class="banner warn">${h(t('partialWarn'))}${a.missing.map((m) => h(t('miss_' + m))).join(', ')}</div>`;
   out += `<ul class="reasons">${a.reasons.map((r) => `<li class="r-${r.kind}">${h(L(r))}</li>`).join('')}</ul>`;
   const ns = parts.nutrition.nutriscore;
@@ -358,8 +374,9 @@ function renderUnreadable(c) {
 
 function renderEczema(ec, es, type = 'food') {
   let out = `<section class="card eczema" id="eczemaPanel"><h2>🩹 ${h(t(type === 'food' ? 'ecHead' : 'ecHeadContact'))}</h2>`;
+  const ptsById = new Map(es ? es.items.map((it) => [it.id, it.penalty]) : []);
   if (es) {
-    out += `<details class="breakdown" id="ecScoreBreakdown"><summary>${h(t('ecScoreHead'))}: ${es.score}/100</summary>
+    out += `<details class="breakdown" id="ecScoreBreakdown"><summary>${h(t('howScored'))}</summary>
       <table>${es.items.map((it) => `<tr><td>${h(L(it.name))} <span class="tag sev-${it.sev}">${h(t('sev_' + it.sev))}</span>${it.traces ? ` <span class="traces">${h(t('ecTraces'))}</span>` : ''}</td><td>−${fmtN(it.penalty)}</td></tr>`).join('')}
       <tr><td><b>${h(t('ecScoreTotal'))}</b></td><td><b>${Math.max(0, Math.round(100 - es.total))}</b></td></tr>
       ${es.capped ? `<tr><td colspan="2" class="r-bad">${h(t('ecScoreCap'))}</td></tr>` : ''}</table>
@@ -368,10 +385,15 @@ function renderEczema(ec, es, type = 'food') {
   if (ec.status === 'unknown') out += `<p class="ec-msg unknown">${h(t('ecUnknown'))}</p>`;
   else if (ec.status === 'none') out += `<p class="ec-msg ok">✓ ${h(t('ecNone'))}</p>`;
   else {
-    out += `<div class="ec-overall sev-${ec.overall}">${h(t('ecOverall'))}: <b>${h(t('sev_' + ec.overall))}</b> · ${ec.count} ${h(t('ecTriggers'))}</div>`;
+    const high = ec.triggers.filter((tr) => tr.sev === 'high').length;
+    const medium = ec.triggers.filter((tr) => tr.sev === 'medium').length;
+    const low = ec.triggers.filter((tr) => tr.sev === 'low').length;
+    out += `<div class="ec-overall sev-${ec.overall}">${h(t('ecSummary', { n: ec.count, high, medium, low }))}</div>
+      <p class="ec-legend muted small">${h(t('ecLegend'))}</p>`;
     if (ec.status === 'found_partial') out += `<p class="ec-msg unknown">${h(t('ecPartial'))}</p>`;
     out += `<ul class="chips">${ec.triggers.map((tr) => `<li class="chip sev-${tr.sev}"><div class="chip-top"><b>${h(L(tr.name))}</b>
-      <span class="sev">${h(t('sev_' + tr.sev))}</span>${tr.traces ? `<span class="traces">${h(t('ecTraces'))}</span>` : ''}</div>
+      <span class="sev">${h(t('sev_' + tr.sev))}</span>${tr.traces ? `<span class="traces">${h(t('ecTraces'))}</span>` : ''}
+      ${ptsById.has(tr.id) ? `<span class="points">−${fmtN(ptsById.get(tr.id))} ${h(t('ecPoints'))}</span>` : ''}</div>
       <div class="chip-why">${h(L(tr.why))}</div></li>`).join('')}</ul>`;
   }
   out += `<p class="ec-foot">${h(t('ecFoot'))}</p></section>`;

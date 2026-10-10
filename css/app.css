@@ -26,7 +26,9 @@ button, input { font: inherit; }
 .history ul { list-style: none; padding: 0; margin: 0; }
 .hist-item { display: flex; align-items: center; gap: 12px; width: 100%; background: #fff; border: 0; border-radius: 12px; padding: 10px; margin: 6px 0; text-align: left; }
 .hist-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mini { width: 44px; height: 44px; border-radius: 50%; color: #fff; font-weight: 800; display: flex; align-items: center; justify-content: center; flex: none; }
+.mini { min-width: 44px; height: 44px; border-radius: 12px; color: #fff; font-weight: 800; display: flex; flex-direction: column; align-items: center; justify-content: center; flex: none; padding: 2px 6px; line-height: 1.1; }
+.mini .mini-n { font-size: 16px; }
+.mini .mini-of { font-size: 10px; opacity: .85; font-weight: 700; }
 .empty { color: var(--grey); padding: 8px 0; }
 .link { background: none; border: 0; color: var(--green); font-weight: 700; padding: 6px 0; cursor: pointer; }
 .back { font-size: 18px; }
@@ -47,6 +49,15 @@ button, input { font: inherit; }
 .circle.unknown { background: #9aa0a6; }
 .band { font-size: 24px; font-weight: 800; margin-top: 8px; line-height: 1.15; }
 .explain { text-align: center; color: var(--grey); }
+.score-explain { font-size: 15px; color: var(--grey); margin: 4px 0 0; max-width: 200px; }
+.scale-bar { width: 100%; max-width: 200px; margin-top: 10px; }
+.scale-track { position: relative; height: 10px; border-radius: 6px; background: linear-gradient(to right, var(--red), var(--orange), #a8d98a, var(--green)); }
+.scale-marker { position: absolute; top: -4px; width: 4px; height: 18px; background: #202124; border-radius: 2px; transform: translateX(-2px); box-shadow: 0 0 0 2px #fff; }
+.scale-ends { display: flex; justify-content: space-between; gap: 6px; font-size: 11px; color: var(--grey); margin-top: 4px; }
+.scale-ends span { flex: 1; text-align: left; }
+.scale-ends span:last-child { text-align: right; }
+.scale-dir { font-size: 12px; font-weight: 700; color: #3c4043; margin-top: 2px; }
+.score-verdict { font-size: 16px; font-weight: 700; color: #3c4043; margin: 6px 0 0; }
 .banner { border-radius: 12px; padding: 10px 12px; margin: 10px 0; font-weight: 600; }
 .banner.warn { background: #fff4e0; color: #8a4b00; }
 .reasons { padding-left: 0; list-style: none; margin: 10px 0 0; }
@@ -82,7 +93,9 @@ td.r-bad { color: var(--red); font-weight: 700; }
 .chip.sev-medium .sev { background: var(--orange); }
 .chip.sev-low .sev { background: #b38f00; }
 .traces { font-size: 14px; background: #fff; border: 1px solid #ccc; border-radius: 10px; padding: 0 8px; }
+.points { font-size: 14px; font-weight: 800; color: #a1150c; margin-left: auto; }
 .chip-why { font-size: 16px; color: #3c4043; margin-top: 4px; }
+.ec-legend { margin: 0 0 8px; }
 .ec-foot { font-size: 15px; color: var(--grey); margin: 10px 0 0; }
 /* ingredients */
 .sec-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
