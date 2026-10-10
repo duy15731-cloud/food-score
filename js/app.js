@@ -1174,3 +1174,6 @@ const TR = initTracker({
 });
 
 applyLang();
+
+// tell the self-repair watchdog in index.html that the app started fine
+if (window.__appBooted) window.__appBooted();

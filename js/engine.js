@@ -201,7 +201,8 @@ function wordRe(w) {
   let re = reCache.get(w);
   if (!re) {
     const plural = /^[a-z ]+[a-z]$/.test(w) && !/s$/.test(w) ? '(?:e?s)?' : '';
-    re = new RegExp(`(?<![\\p{L}\\p{N}])${esc(w)}${plural}(?![\\p{L}\\p{N}])`, 'iu');
+    // "start or non-letter" is consumed instead of a lookbehind: iOS before 16.4 cannot load a file that has one
+    re = new RegExp(`(?:^|[^\\p{L}\\p{N}])${esc(w)}${plural}(?![\\p{L}\\p{N}])`, 'iu');
     reCache.set(w, re);
   }
   return re;
@@ -228,7 +229,7 @@ function matchesAny(text, words, notPhrases) {
 // E-numbers / INS numbers in free text: "E150d", "e 211", "INS 621", "E322(i)"
 export function eNumbersInText(text) {
   const out = new Set();
-  const re = /(?<![\p{L}\p{N}])(?:e|ins)\s?-?(\d{3,4})\s?([a-f])?(?:\s?\(?\s?([ivx]+)\s?\))?(?![\p{L}\p{N}])/giu;
+  const re = /(?:^|[^\p{L}\p{N}])(?:e|ins)\s?-?(\d{3,4})\s?([a-f])?(?:\s?\(?\s?([ivx]+)\s?\))?(?![\p{L}\p{N}])/giu;
   let m;
   while ((m = re.exec(text))) out.add(('e' + m[1] + (m[2] || '')).toLowerCase());
   return [...out];
@@ -1119,7 +1120,7 @@ export const HAZARDS = [
     ['coal tar', 'coal-tar']),
   Hz('dea', 'high', { en: 'Diethanolamine (DEA) / cocamide DEA', vi: 'Diethanolamine (DEA) / cocamide DEA' },
     { en: 'possible carcinogen (IARC 2B, vol. 101); DEA itself is prohibited in EU cosmetics (Annex II)', vi: 'có thể gây ung thư (IARC 2B); bản thân DEA bị cấm trong mỹ phẩm EU (Phụ lục II)' },
-    ['diethanolamine', 'cocamide dea', 'lauramide dea', 'oleamide dea', 'linoleamide dea'], { re: /(?<![\p{L}\p{N}])dea(?![\p{L}\p{N}-])/u }),
+    ['diethanolamine', 'cocamide dea', 'lauramide dea', 'oleamide dea', 'linoleamide dea'], { re: /(?:^|[^\p{L}\p{N}])dea(?![\p{L}\p{N}-])/u }),
   Hz('musk-xylene', 'high', { en: 'Nitro musk (musk xylene)', vi: 'Xạ hương nitro (musk xylene)' },
     { en: 'very persistent and bioaccumulative — EU Substance of Very High Concern (ECHA SVHC, vPvB)', vi: 'rất khó phân huỷ và tích tụ sinh học — chất rất đáng lo ngại ở EU (ECHA SVHC)' },
     ['musk xylene']),
@@ -1182,11 +1183,11 @@ export const HAZARDS = [
     ['tea tree oil', 'melaleuca alternifolia', 'lavender oil', 'lavandula angustifolia oil', 'peppermint oil', 'mentha piperita oil', 'eucalyptus oil', 'eucalyptus globulus leaf oil', 'citrus aurantium dulcis peel oil', 'citrus limon peel oil', 'rosmarinus officinalis leaf oil', 'cananga odorata', 'essential oil']),
   Hz('tea', 'low', { en: 'Triethanolamine (TEA)', vi: 'Triethanolamine (TEA)' },
     { en: 'pH adjuster; restricted in EU (Annex III) because it can form nitrosamines with some ingredients', vi: 'chất điều chỉnh pH; bị giới hạn ở EU (Phụ lục III) vì có thể tạo nitrosamin với một số thành phần' },
-    ['triethanolamine', 'tea-lauryl sulfate'], { re: /(?<![\p{L}\p{N}])tea(?=[- ](?:lauryl|laureth|cocoyl|dodecylbenzenesulfonate))/u }),
+    ['triethanolamine', 'tea-lauryl sulfate'], { re: /(?:^|[^\p{L}\p{N}])tea(?=[- ](?:lauryl|laureth|cocoyl|dodecylbenzenesulfonate))/u }),
   Hz('ethoxylated', 'low', { en: 'Ethoxylated ingredient (PEG / "-eth")', vi: 'Thành phần ethoxyl hoá (PEG / “-eth”)' },
     { en: 'safe itself, but the process can leave traces of 1,4-dioxane (IARC 2B) — a contamination risk, not an ingredient risk', vi: 'bản thân an toàn, nhưng quá trình sản xuất có thể để lại vết 1,4-dioxane (IARC 2B) — rủi ro tạp nhiễm, không phải của thành phần' },
     ['sodium laureth sulfate', 'ammonium laureth sulfate', 'laureth', 'ceteareth', 'steareth', 'oleth', 'pareth', 'ceteth', 'polysorbate', '1,4-dioxane'],
-    { re: /(?<![\p{L}\p{N}])peg-\d|(?<![\p{L}\p{N}])\w+eth-\d/u }),
+    { re: /(?:^|[^\p{L}\p{N}])peg-\d|(?:^|[^\p{L}\p{N}])\w+eth-\d/u }),
   Hz('brightener', 'low', { en: 'Optical brightener', vi: 'Chất làm trắng quang học' },
     { en: 'stays on fabric to look "whiter"; poorly biodegradable, occasional skin irritant', vi: 'bám trên vải để trông “trắng hơn”; khó phân huỷ, đôi khi kích ứng da' },
     ['optical brightener', 'optical brighteners', 'fluorescent whitening agent', 'distyrylbiphenyl', 'stilbene']),
@@ -1768,7 +1769,10 @@ export function parseNutritionFacts(rawText) {
   out.satfat = val(/sat(?:urated|\.)?\s*fat\s*[:\-]?\s*(<\s?1|\d+(?:\.\d+)?)\s*g/);
   const sod = low.match(/sodium\s*[:\-]?\s*(<\s?\d+|\d+(?:\.\d+)?)\s*(mg|g)\b/);
   out.sodium_mg = sod ? (Number(sod[1].replace(/<\s?/, '')) * (sod[2] === 'g' ? 1000 : 1)) : null;
-  out.sugars = val(/total\s*sugars?\s*[:\-]?\s*(<\s?1|\d+(?:\.\d+)?)\s*g/) ?? val(/(?<!added\s)sugars\s*[:\-]?\s*(<\s?1|\d+(?:\.\d+)?)\s*g/);
+  out.sugars = val(/total\s*sugars?\s*[:\-]?\s*(<\s?1|\d+(?:\.\d+)?)\s*g/) ?? (() => { // "sugars" that is not "added sugars" (masked first; no lookbehind)
+    const m = low.replace(/added\s*sugars/g, 'added_x').match(/sugars\s*[:\-]?\s*(<\s?1|\d+(?:\.\d+)?)\s*g/);
+    return !m ? null : m[1] === '<1' || m[1] === '< 1' ? 0.5 : Number(m[1]);
+  })();
   out.addedSugars = val(/includes\s*(<\s?1|\d+(?:\.\d+)?)\s*g\s*added\s*sugars/);
   out.fiber = val(/dietary\s*fib(?:er|re)\s*[:\-]?\s*(<\s?1|\d+(?:\.\d+)?)\s*g/);
   out.protein = val(/protein\s*[:\-]?\s*(<\s?1|\d+(?:\.\d+)?)\s*g/);
@@ -1803,7 +1807,14 @@ export function per100FromServing(f) {
 const ING_HEAD_RE = /\b(?:ingred\S{0,6}\s*[:;.]|ingred[il1!;|]?e?n[t1]?s?\b|thành phần\s*[:;.]?)\s*/i;
 // The allergen statement "CONTAINS WHEAT AND SOY." / "CONTAINS: MILK" — but NOT the in-list
 // "CONTAINS LESS THAN 2% OF:" (that line always has a % sign or "less than").
-const CONTAINS_RE = /(?<!may\s)\bcontains\b(?![^\n]*%)(?!\s+l\S{0,4}s\s+than)\s*[:;]?\s*([^\n]+)/i;
+const CONTAINS_RE_G = /\bcontains\b(?![^\n]*%)(?!\s+l\S{0,4}s\s+than)\s*[:;]?\s*([^\n]+)/gi;
+// the first CONTAINS statement that is not "may contain(s)" (no lookbehind: iOS before 16.4 cannot load one)
+function matchContains(t) {
+  CONTAINS_RE_G.lastIndex = 0;
+  let m;
+  while ((m = CONTAINS_RE_G.exec(t))) if (!/may\s$/i.test(t.slice(Math.max(0, m.index - 4), m.index))) return m;
+  return null;
+}
 // OCR turns a dagger footnote mark into ! ' " ’ ” ? (and swallows the comma after it):
 // "BEEF EXTRACT" BLEF FAT! BLACK PEPPER! CITRIC ACID" -> "BEEF EXTRACT, BLEF FAT, BLACK PEPPER, CITRIC ACID"
 function cleanOcrIngredients(s) {
@@ -1824,7 +1835,7 @@ export function extractLabelText(rawText) {
   let ingredients = '';
   if (m) {
     const rest = t.slice(m.index + m[0].length);
-    const hard = rest.search(/(?<!may\s)\bcontains\s*[:;]|\n\s*contains\b(?![^\n]*%)(?!\s+l\S{0,4}s\s+than)|may\s+contain|manufactured|distributed|produced\s+(?:by|in)|nutrition\s+facts|allergen/i);
+    const hard = rest.search(/\bcontains\s*[:;]|\n\s*contains\b(?![^\n]*%)(?!\s+l\S{0,4}s\s+than)|may\s+contain|manufactured|distributed|produced\s+(?:by|in)|nutrition\s+facts|allergen/i);
     // A blank line ends the list — unless OCR put it INSIDE the list: a bracket is still open
     // ("DRIED FLAKES [BOK CHOY, ... DEXTROSE)⏎⏎GREEN ONION, ...]") or the text before it ends with a comma.
     let stop = hard;
@@ -1840,7 +1851,7 @@ export function extractLabelText(rawText) {
       .replace(/-[ \t]*\n[ \t]*(?=(?:and|or|&)\b)/gi, '- ').replace(/-\n/g, '').replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
     ingredients = cleanOcrIngredients(ingredients);
   }
-  const c = t.match(CONTAINS_RE);
+  const c = matchContains(t);
   const mc = t.match(/may\s+contain[^:\n]*[:]?\s*([^\n]+)/i);
   return { ingredients, contains: c ? c[1].trim() : '', mayContain: mc ? mc[1].trim() : '', foundHeading: !!m };
 }

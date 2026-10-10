@@ -15,6 +15,32 @@
 <meta name="apple-mobile-web-app-title" content="Food Score">
 <link rel="stylesheet" href="css/app.css">
 <script src="version.js"></script>
+<script>
+// Self-repair (plain old JavaScript on purpose, so even an old phone runs it): if the app does not start
+// within 10 s, or one of its files fails to load, throw away the offline copy (caches + service worker)
+// and reload fresh. Scans, allergies and profile live in localStorage and are NOT touched. Once per session.
+(function () {
+  var booted = false, KEY = 'fs-self-repair';
+  window.__appBooted = function () { booted = true; try { sessionStorage.removeItem(KEY); } catch (e) {} };
+  function repair(why) {
+    if (booted) return;
+    try { if (sessionStorage.getItem(KEY)) return; sessionStorage.setItem(KEY, why || '1'); } catch (e) { return; }
+    var jobs = [];
+    if (window.caches) jobs.push(caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); }));
+    if (navigator.serviceWorker) jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); }));
+    // also refresh the browser's own short-lived copies, so the reload cannot pick up a mixed set again
+    if (window.fetch) ['./', './index.html', './version.js', './sw.js', './css/app.css', './js/app.js', './js/engine.js', './js/i18n.js',
+      './js/diet.js', './js/tracker.js', './js/config.js', './js/prices.js'].forEach(function (u) { jobs.push(fetch(u, { cache: 'reload' }).catch(function () {})); });
+    Promise.all(jobs).then(go, go);
+    function go() { location.reload(); }
+  }
+  window.addEventListener('error', function (e) {
+    var t = e && e.target;
+    if ((t && t.tagName === 'SCRIPT') || (e && e.error && e.error.name === 'SyntaxError')) repair('load-error');
+  }, true);
+  setTimeout(function () { repair('timeout'); }, 10000);
+})();
+</script>
 </head>
 <body>
 <header class="top">

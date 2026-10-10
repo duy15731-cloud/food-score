@@ -7,7 +7,14 @@ const SHELL = ['./', './index.html', './version.js', './manifest.json', './css/a
   './vendor/zxing/zxing-reader.js', './vendor/zxing/zxing_reader.wasm'];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)));
+  // cache: 'reload' = straight from the server, never the phone's 10-minute HTTP copies. Without it an update
+  // published minutes after the last one could cache a MIX of old and new files that do not fit together
+  // (the iPhone app froze on 2026-10-10 and had to be reinstalled). The cached version.js must also say
+  // this version, or the install fails and is retried later instead of activating a mixed set.
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))
+    .then(() => c.match('./version.js')).then((r) => r && r.text()).then((txt) => {
+      if (!txt || !txt.includes(self.APP_VERSION)) return caches.delete(CACHE).then(() => { throw new Error('mixed versions while caching'); });
+    })));
   // no skipWaiting here: the page shows "new version available, tap to update" and asks us to.
 });
 self.addEventListener('message', (e) => { if (e.data === 'SKIP_WAITING') self.skipWaiting(); });
@@ -21,7 +28,8 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;          // Open Food Facts etc. go straight to the network
   if (req.mode === 'navigate') {
-    e.respondWith(caches.match('./index.html').then((r) => r || fetch(req)));
+    // this version's own copy only (a global caches.match could hand back another version's page)
+    e.respondWith(caches.open(CACHE).then((c) => c.match('./index.html')).then((r) => r || fetch(req)));
     return;
   }
   // cache-first; files fetched later (the OCR engine) are added to the cache on first use
