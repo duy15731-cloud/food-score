@@ -19,7 +19,9 @@
 <body>
 <header class="top">
   <h1 id="appTitle">Food Score</h1>
-  <button id="langBtn" class="lang" type="button" aria-label="Language">EN</button>
+  <div class="lang-toggle" role="group" aria-label="Ngôn ngữ / Language">
+    <button type="button" class="lang-opt" data-lang="vi" lang="vi">🇻🇳 Tiếng Việt</button><button type="button" class="lang-opt" data-lang="en" lang="en">🇺🇸 English</button>
+  </div>
 </header>
 
 <div id="updateBar" class="update-bar" hidden><button id="updateBtn" type="button"></button></div>
@@ -41,15 +43,23 @@
   <section class="history">
     <div class="history-head"><h2 data-t="history"></h2><button id="clearHist" type="button" class="link" data-t="clear"></button></div>
     <ul id="histList"></ul>
+    <button id="rankBtn" type="button" class="big secondary rank-btn" hidden><span class="ico">📊</span><span data-t="myProducts"></span></button>
   </section>
 </main>
 
 <main id="result" class="view" hidden></main>
+<main id="ranking" class="view" hidden></main>
 
-<div id="busy" class="busy" hidden><div class="spinner"></div><p id="busyText"></p></div>
+<div id="busy" class="busy" hidden><div class="spinner"></div><p id="busyText"></p><p id="busyStep" class="busy-step"></p></div>
 
 <div id="scanner" class="scanner" hidden>
   <video id="video" playsinline muted autoplay></video>
+  <div class="scan-top">
+    <button id="scanBack" type="button" class="scan-back" data-t="camBack"></button>
+    <div class="lang-toggle" role="group" aria-label="Ngôn ngữ / Language">
+      <button type="button" class="lang-opt" data-lang="vi" lang="vi">🇻🇳 Tiếng Việt</button><button type="button" class="lang-opt" data-lang="en" lang="en">🇺🇸 English</button>
+    </div>
+  </div>
   <div class="frame"><div class="laser"></div></div>
   <p class="scan-hint" data-t="scanHint"></p>
   <div class="scan-bar">

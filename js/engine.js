@@ -12,8 +12,10 @@ export const OFF_FIELDS = ['code', 'product_name', 'product_name_en', 'product_n
   'ingredients', 'allergens_tags', 'traces_tags', 'additives_tags', 'nutriments', 'nova_group',
   'nutriscore_score', 'nutriscore_grade', 'nutriscore', 'categories_tags', 'lang'];
 
-export function offUrl(code) {
-  return `https://world.openfoodfacts.org/api/v2/product/${code}.json?fields=${OFF_FIELDS.join(',')}`;
+// db: 'food' (Open Food Facts) | 'beauty' (Open Beauty Facts) | 'products' (Open Products Facts) — see DATABASES
+export function offUrl(code, db = 'food') {
+  const host = (DATABASES.find((d) => d.id === db) || DATABASES[0]).host;
+  return `https://${host}/api/v2/product/${code}.json?fields=${OFF_FIELDS.join(',')}`;
 }
 
 // Classify one OFF response into the three states. `httpStatus` 0 = network error.
@@ -347,20 +349,91 @@ export const ECZEMA = [
     { en: 'weak, indirect evidence: dietary AGEs from frying may add to skin inflammation (Hong 2020)', vi: 'bằng chứng yếu, gián tiếp: AGE từ đồ chiên có thể góp phần gây viêm da (Hong 2020)' },
     ['fried', 'frit', 'frite', 'chiên', 'rán']),
 ];
-const ECZ_BY_ID = Object.fromEntries(ECZEMA.map((e) => [e.id, e]));
+// ---------------------------------------------------------------------------------------------
+// ECZEMA (skin-contact) table — used for cosmetics / personal care / household products. For things that
+// touch the skin the eczema question is contact IRRITATION or contact ALLERGY, not food allergy.
+// Sources:
+//  [NACDG]  North American Contact Dermatitis Group patch-test series (DeKoven et al., Dermatitis 2023):
+//           fragrance mix, MI, formaldehyde + releasers, PPD, lanolin, CAPB, propylene glycol are on it.
+//  [ACDS]   American Contact Dermatitis Society "Allergen of the Year": MI 2013, CAPB 2004, PPD 2006,
+//           formaldehyde 2015, propylene glycol 2018, parabens 2019 (picked to show they are RARE allergens:
+//           the "paraben paradox"), lanolin 2023.
+//  [SCCS59] EU SCCS/1459/11 opinion on fragrance allergens (isoeugenol, cinnamal, HICC = established
+//           allergens; oxidised limonene/linalool are allergens).
+//  [NEA]    US National Eczema Association — avoid fragrance, harsh surfactants (SLS), bleach/ammonia cleaners;
+//           wear gloves for household cleaning (hand eczema).
+//  [TTO]    EU SCCP/1155/08 opinion on tea tree oil (oxidised oil is a sensitiser).
+// ---------------------------------------------------------------------------------------------
+export const ECZEMA_CONTACT = [
+  E('c_fragrance', 'high', { en: 'Fragrance / parfum', vi: 'Hương liệu / nước hoa (parfum)' },
+    { en: 'the most common cause of allergic contact eczema from products (NACDG, NEA) — "fragrance" can hide dozens of chemicals', vi: 'nguyên nhân hay gặp nhất gây chàm tiếp xúc dị ứng từ mỹ phẩm (NACDG, NEA) — chữ “fragrance” có thể che hàng chục hoá chất' },
+    ['fragrance', 'parfum', 'perfume', 'hương liệu', 'nước hoa', 'masking fragrance'],
+    { not: ['fragrance free', 'fragrance-free', 'without fragrance', 'unscented', 'không hương liệu', 'không mùi', 'sans parfum'] }),
+  E('c_mi', 'high', { en: 'Methylisothiazolinone (MI / MCI)', vi: 'Methylisothiazolinone (MI / MCI)' },
+    { en: 'preservative behind an epidemic of contact eczema; Allergen of the Year 2013 (ACDS); banned in EU leave-on products (EU 2016/1198, 2017/1224)', vi: 'chất bảo quản gây “dịch” chàm tiếp xúc; Chất gây dị ứng của năm 2013 (ACDS); bị cấm trong sản phẩm để lại trên da ở EU (EU 2016/1198, 2017/1224)' },
+    ['methylisothiazolinone', 'methylchloroisothiazolinone', 'kathon', 'benzisothiazolinone', 'octylisothiazolinone', 'isothiazolinone']),
+  E('c_formaldehyde', 'high', { en: 'Formaldehyde / formaldehyde-releasing preservative', vi: 'Formaldehyde / chất bảo quản giải phóng formaldehyde' },
+    { en: 'a top patch-test allergen (NACDG; ACDS Allergen of the Year 2015 for formaldehyde)', vi: 'chất gây dị ứng hàng đầu khi thử áp da (NACDG; ACDS 2015)' },
+    ['formaldehyde', 'formalin', 'dmdm hydantoin', 'quaternium-15', 'quaternium 15', 'imidazolidinyl urea', 'diazolidinyl urea', 'bronopol', '2-bromo-2-nitropropane-1,3-diol', 'sodium hydroxymethylglycinate', 'methenamine']),
+  E('c_ppd', 'high', { en: 'Hair dye PPD (p-phenylenediamine)', vi: 'Thuốc nhuộm tóc PPD' },
+    { en: 'strong contact allergen in hair dyes (ACDS Allergen of the Year 2006)', vi: 'chất gây dị ứng tiếp xúc mạnh trong thuốc nhuộm tóc (ACDS 2006)' },
+    ['p-phenylenediamine', 'paraphenylenediamine', 'phenylenediamine', 'toluene-2,5-diamine', 'ppd']),
+  E('c_bleach', 'high', { en: 'Bleach (sodium hypochlorite)', vi: 'Thuốc tẩy (natri hypoclorit)' },
+    { en: 'strong skin irritant — use gloves; harsh cleaners are a classic cause of hand eczema (NEA)', vi: 'gây kích ứng da mạnh — hãy đeo găng; chất tẩy rửa mạnh là nguyên nhân kinh điển của chàm tay (NEA)' },
+    ['sodium hypochlorite', 'hypochlorite', 'chlorine bleach', 'bleach', 'javel', 'nước tẩy javel'],
+    { not: ['non-chlorine bleach', 'non chlorine bleach', 'oxygen bleach', 'chlorine-free', 'bleach-free', 'bleach free'] }),
+  E('c_fragallergen', 'medium', { en: 'Named fragrance allergen', vi: 'Chất gây dị ứng trong hương liệu' },
+    { en: 'one of the fragrance allergens the EU requires on the label (EU 1223/2009 Annex III; SCCS/1459/11)', vi: 'một trong các chất gây dị ứng hương liệu mà EU bắt buộc ghi trên nhãn (EU 1223/2009 Phụ lục III; SCCS/1459/11)' },
+    ['limonene', 'linalool', 'citronellol', 'geraniol', 'citral', 'eugenol', 'isoeugenol', 'cinnamal', 'cinnamyl alcohol', 'hydroxycitronellal', 'coumarin', 'benzyl salicylate', 'benzyl benzoate', 'benzyl cinnamate', 'benzyl alcohol', 'farnesol', 'alpha-isomethyl ionone', 'amyl cinnamal', 'hexyl cinnamal', 'anise alcohol', 'evernia prunastri', 'evernia furfuracea', 'hydroxyisohexyl 3-cyclohexene carboxaldehyde', 'butylphenyl methylpropional']),
+  E('c_essentialoil', 'medium', { en: 'Essential oil (tea tree, lavender, peppermint, citrus…)', vi: 'Tinh dầu (tràm trà, oải hương, bạc hà, cam chanh…)' },
+    { en: '"natural" oils are fragrance chemicals too; oxidised tea tree oil is a sensitiser (SCCP/1155/08)', vi: 'tinh dầu “tự nhiên” cũng là hoá chất hương liệu; tinh dầu tràm trà bị ôxy hoá gây mẫn cảm (SCCP/1155/08)' },
+    ['tea tree oil', 'melaleuca alternifolia', 'lavender oil', 'lavandula angustifolia oil', 'peppermint oil', 'mentha piperita oil', 'eucalyptus oil', 'eucalyptus globulus leaf oil', 'citrus aurantium dulcis peel oil', 'citrus limon peel oil', 'orange peel oil', 'lemon peel oil', 'rosemary oil', 'rosmarinus officinalis leaf oil', 'ylang ylang', 'cananga odorata', 'clove oil', 'cinnamon oil', 'essential oil', 'tinh dầu']),
+  E('c_capb', 'medium', { en: 'Cocamidopropyl betaine', vi: 'Cocamidopropyl betaine' },
+    { en: 'foaming agent in "gentle" washes; contact allergen (ACDS Allergen of the Year 2004)', vi: 'chất tạo bọt trong sữa tắm “dịu nhẹ”; gây dị ứng tiếp xúc (ACDS 2004)' },
+    ['cocamidopropyl betaine', 'cocamidopropyl dimethylamine', 'amidoamine']),
+  E('c_sls', 'medium', { en: 'Harsh surfactant (sodium lauryl sulfate)', vi: 'Chất tạo bọt mạnh (sodium lauryl sulfate)' },
+    { en: 'strips the skin barrier — the standard irritant used to test skin irritation; avoid with eczema (NEA)', vi: 'làm mất lớp bảo vệ da — là chất kích ứng chuẩn dùng để thử kích ứng da; người bị chàm nên tránh (NEA)' },
+    ['sodium lauryl sulfate', 'sodium dodecyl sulfate', 'ammonium lauryl sulfate', 'sls']),
+  E('c_pg', 'medium', { en: 'Propylene glycol', vi: 'Propylene glycol' },
+    { en: 'can irritate and sensitise eczema skin (ACDS Allergen of the Year 2018)', vi: 'có thể kích ứng và gây mẫn cảm da bị chàm (ACDS 2018)' },
+    ['propylene glycol']),
+  E('c_lanolin', 'medium', { en: 'Lanolin (wool fat)', vi: 'Lanolin (mỡ lông cừu)' },
+    { en: 'contact allergen, more often on broken eczema skin (ACDS Allergen of the Year 2023)', vi: 'chất gây dị ứng tiếp xúc, hay gặp hơn trên da chàm bị tổn thương (ACDS 2023)' },
+    ['lanolin', 'lanolin alcohol', 'wool alcohol', 'wool wax', 'adeps lanae', 'eucerit']),
+  E('c_quats', 'medium', { en: 'Quaternary ammonium disinfectant (benzalkonium…)', vi: 'Chất khử khuẩn amoni bậc bốn (benzalkonium…)' },
+    { en: 'skin irritant and occasional allergen in disinfectant sprays/wipes', vi: 'gây kích ứng da, đôi khi gây dị ứng, trong xịt/khăn khử khuẩn' },
+    ['benzalkonium chloride', 'benzethonium chloride', 'didecyldimethylammonium chloride', 'alkyl dimethyl benzyl ammonium chloride', 'quaternary ammonium', 'cetrimonium chloride']),
+  E('c_ammonia', 'medium', { en: 'Ammonia', vi: 'Amoniac' },
+    { en: 'irritates skin and airways; harsh cleaners worsen hand eczema (NEA)', vi: 'kích ứng da và đường thở; chất tẩy rửa mạnh làm chàm tay nặng hơn (NEA)' },
+    ['ammonia', 'ammonium hydroxide', 'amoniac']),
+  E('c_oxybenzone', 'low', { en: 'Oxybenzone (benzophenone-3)', vi: 'Oxybenzone (benzophenone-3)' },
+    { en: 'sunscreen filter that can cause (photo)allergic contact reactions', vi: 'chất chống nắng có thể gây phản ứng dị ứng (với ánh sáng) khi tiếp xúc' },
+    ['oxybenzone', 'benzophenone-3', 'benzophenone 3']),
+  E('c_parabens', 'low', { en: 'Parabens', vi: 'Paraben' },
+    { en: 'rarely cause allergy on healthy skin ("paraben paradox", ACDS 2019) — a low risk on broken skin only', vi: 'hiếm khi gây dị ứng trên da lành (“nghịch lý paraben”, ACDS 2019) — chỉ rủi ro thấp trên da tổn thương' },
+    ['methylparaben', 'ethylparaben', 'propylparaben', 'butylparaben', 'isobutylparaben', 'isopropylparaben', 'paraben', 'parabens']),
+  E('c_dyes', 'low', { en: 'Colour / dye', vi: 'Phẩm màu' },
+    { en: 'dyes are occasional contact allergens', vi: 'phẩm màu đôi khi gây dị ứng tiếp xúc' },
+    ['fd&c', 'd&c', 'coal tar', 'acid yellow', 'acid red', 'acid blue']),
+  E('c_brightener', 'low', { en: 'Optical brightener (laundry)', vi: 'Chất làm trắng quang học (giặt)' },
+    { en: 'stays on fabric that touches skin; an occasional irritant', vi: 'bám lại trên vải tiếp xúc với da; đôi khi gây kích ứng' },
+    ['optical brightener', 'optical brighteners', 'fluorescent whitening agent', 'distyrylbiphenyl', 'stilbene']),
+];
+const ECZ_BY_ID = Object.fromEntries([...ECZEMA, ...ECZEMA_CONTACT].map((e) => [e.id, e]));
 const SEV_RANK = { high: 3, medium: 2, low: 1, none: 0 };
 const LOWER = { high: 'medium', medium: 'low', low: 'low' };
 
-function eczemaHitsInText(text, parentText = '') {
+// table: ECZEMA (food triggers) or ECZEMA_CONTACT (skin products) — picked by product type
+function eczemaHitsInText(text, parentText = '', table = ECZEMA) {
   const t = norm(text);
   const hits = [];
-  for (const e of ECZEMA) {
+  for (const e of table) {
     if (!e.words.length) continue;
     const w = matchesAny(t, e.words, e.not);
     if (w) hits.push(e.id);
   }
   for (const code of eNumbersInText(t)) {
-    for (const e of ECZEMA) if (e.additives.includes(code) && !hits.includes(e.id)) hits.push(e.id);
+    for (const e of table) if (e.additives.includes(code) && !hits.includes(e.id)) hits.push(e.id);
   }
   // soy inside a lecithin ingredient = soy lecithin (much weaker trigger)
   const ctx = norm(text + ' ' + parentText);
@@ -376,19 +449,26 @@ function eczemaHitsInText(text, parentText = '') {
 // parenthetical purpose notes such as "(to protect taste)" are not ingredients
 const NOTE_RE = /^(to |for |as an? |added |used |pour |để |(?:preservatives?|antioxidants?|colou?rs?|colou?ring|acidulants?)$)/i;
 const CLAIM_RE = /^(gluten[- ]free|sans gluten|no gluten|không chứa gluten|vegan|organic|non[- ]gmo|kosher|halal)\b/i;
-const PREFIX_RE = /^(ingredients?|ingrédients?|thành phần|contains (?:2|two) ?% or less of|contains less than (?:2|two) ?% of|less than (?:2|two) ?% of|(?:and )?(?:2|two) ?% or less of)\s*[:.]?\s*/i;
+// "CONTAINS LESS THAN 2% OF:" — OCR often garbles LESS ("LSS", "L=$S"), so that word is matched loosely.
+const PREFIX_RE = /^(ingredients?|ingrédients?|thành phần|contains (?:2|two) ?% or less of|(?:contains )?l\S{0,4}s than (?:2|two) ?% of|(?:and )?(?:2|two) ?% or less of)\s*[:.]?\s*/i;
+// a footnote key printed after the list ("†POWDERED", "*ORGANIC") is not an ingredient
+const FOOTNOTE_RE = /^[†‡*]|^(?:powdered|dried|dehydrated|organic|ingredients? not in regular \w+)$/i;
 function cleanToken(s) {
-  return s.replace(/\s+/g, ' ').replace(PREFIX_RE, '').replace(PREFIX_RE, '')
+  return s.replace(/\s+/g, ' ').trim().replace(PREFIX_RE, '').replace(PREFIX_RE, '')
     .replace(/^[\s*:;.,\-–]+|[\s*:;.,\-–]+$/g, '').replace(/^(and|et|và)\s+/i, '').trim();
 }
 // "Sugar, palm oil, HAZELNUTS 13%, emulsifiers: lecithins [SOY), vanillin. Gluten free."
 export function parseIngredientsText(text) {
-  const src = String(text || '').replace(/\r/g, '').replace(/-\n/g, '').replace(/\n/g, ' ').trim();
+  const src = String(text || '').replace(/\r/g, '')
+    .replace(/-[ \t]*\n[ \t]*(?=(?:and|or|&|et|và)\b)/gi, '- ')   // "MONO-⏎AND DIGLYCERIDES" keeps its hyphen
+    .replace(/-\n/g, '').replace(/\n/g, ' ')                        // "MALTO-⏎DEXTRIN" -> "MALTODEXTRIN"
+    .replace(/[†‡]/g, '')                                           // dagger footnote marks ("GARLIC†")
+    .trim();
   if (!src) return [];
   // split into top-level tokens (commas/semicolons, or ". " sentence breaks) at bracket depth 0
   const parse = (s) => {
     const items = [];
-    let depth = 0, cur = '', sub = '';
+    let depth = 0, cur = '', sub = '', closed = false;
     const push = () => {
       const name = cleanToken(cur);
       const children = sub ? parse(sub) : [];
@@ -399,8 +479,11 @@ export function parseIngredientsText(text) {
     for (let i = 0; i < s.length; i++) {
       const ch = s[i];
       if ('([{'.includes(ch)) { if (depth > 0) sub += ch; depth++; continue; }
-      if (')]}'.includes(ch)) { depth = Math.max(0, depth - 1); if (depth > 0) sub += ch; continue; }
+      if (')]}'.includes(ch)) { depth = Math.max(0, depth - 1); if (depth > 0) sub += ch; else closed = true; continue; }
       if (depth > 0) { sub += ch; continue; }
+      // "...D-XYLOSE)] TOCOPHEROLS (ANTIOXIDANT)": a word right after a closed bracket with no comma between
+      // (lost by OCR or the printer) starts a new ingredient instead of extending the previous one
+      if (closed && /\S/.test(ch)) { closed = false; if (/\p{L}/u.test(ch) && sub) push(); }
       const prev = s[i - 1] || '', next = s[i + 1] || '';
       if ((ch === ',' && !(/\d/.test(prev) && /\d/.test(next))) || ch === ';' || (ch === '.' && (next === ' ' || next === '') && !/\d/.test(prev) && !/\b(no|st|approx|incl)$/i.test(cur))) { push(); continue; }
       cur += ch;
@@ -408,7 +491,9 @@ export function parseIngredientsText(text) {
     push();
     return items;
   };
-  return parse(src);
+  const top = parse(src);
+  while (top.length && !top[top.length - 1].children.length && FOOTNOTE_RE.test(top[top.length - 1].text)) top.pop();
+  return top;
 }
 // OFF `ingredients` array -> same {text, id, children} shape
 function offTree(list) {
@@ -470,12 +555,15 @@ export function rateIngredient(text, id = '', tagCodes = []) {
 }
 
 // Rate a whole tree; returns a flat list in LABEL order with depth for indentation.
-export function rateIngredientTree(tree, tagCodes = []) {
+// opts.rate / opts.table switch between food (default) and skin/household products
+export function rateIngredientTree(tree, tagCodes = [], opts = {}) {
+  const rate = opts.rate || ((text, id) => rateIngredient(text, id, tagCodes));
+  const table = opts.table || ECZEMA;
   const out = [];
   const walk = (items, depth, parentText) => {
     for (const it of items) {
-      const health = rateIngredient(it.text, it.id, tagCodes);
-      const ecz = eczemaHitsInText(`${it.text} ${idWords(it.id)}`, parentText);
+      const health = rate(it.text, it.id);
+      const ecz = eczemaHitsInText(`${it.text} ${idWords(it.id)}`, parentText, table);
       const sev = ecz.reduce((m, id) => (SEV_RANK[ECZ_BY_ID[id].sev] > SEV_RANK[m] ? ECZ_BY_ID[id].sev : m), 'none');
       out.push({ text: it.text, id: it.id || '', depth, order: out.length, health, eczema: { sev, ids: ecz } });
       if (it.children && it.children.length) walk(it.children, depth + 1, it.text);
@@ -492,7 +580,7 @@ export function sortWorstFirst(list) {
 // ---------------------------------------------------------------------------------------------
 // ECZEMA check for a whole product
 // ---------------------------------------------------------------------------------------------
-export function eczemaCheck({ ingredients = [], hasIngredientText = false, allergens = [], traces = [], additiveCodes = [], containsText = '', mayContainText = '' }) {
+export function eczemaCheck({ ingredients = [], hasIngredientText = false, allergens = [], traces = [], additiveCodes = [], containsText = '', mayContainText = '', table = ECZEMA }) {
   const found = new Map(); // id -> {id, sev, traces, via:Set}
   const add = (id, via, isTrace = false) => {
     const e = ECZ_BY_ID[id];
@@ -506,7 +594,7 @@ export function eczemaCheck({ ingredients = [], hasIngredientText = false, aller
     }
   };
   for (const ing of ingredients) for (const id of ing.eczema.ids) add(id, ing.text);
-  for (const id of eczemaHitsInText(containsText)) add(id, containsText);
+  for (const id of eczemaHitsInText(containsText, '', table)) add(id, containsText);
   const tagIds = (tags) => ECZEMA.filter((e) => e.allergens.some((a) => (tags || []).includes(a))).map((e) => e.id);
   for (const id of tagIds(allergens)) {
     if (id === 'soy' && found.has('soylecithin') && !found.has('soy')) continue; // the allergen tag is explained by the lecithin
@@ -514,7 +602,7 @@ export function eczemaCheck({ ingredients = [], hasIngredientText = false, aller
   }
   for (const code of additiveCodes) for (const e of ECZEMA) if (e.additives.includes(code)) add(e.id, code.toUpperCase());
   for (const id of tagIds(traces)) if (!found.has(id)) add(id, 'may contain', true);
-  for (const id of eczemaHitsInText(mayContainText)) if (!found.has(id)) add(id, 'may contain', true);
+  for (const id of eczemaHitsInText(mayContainText, '', table)) if (!found.has(id)) add(id, 'may contain', true);
 
   const triggers = [...found.values()].map((f) => {
     const e = ECZ_BY_ID[f.id];
@@ -701,6 +789,8 @@ function nutritionReasons(n, cat, isWater) {
  * }
  */
 export function analyze(input) {
+  const type = input.productType || 'food';
+  if (type !== 'food') return analyzeNonFood(input, type);
   const tree = input.ingredientTree && input.ingredientTree.length ? input.ingredientTree : parseIngredientsText(input.ingredientsText);
   const hasIngredientText = !!(input.ingredientsText && input.ingredientsText.trim()) || tree.length > 0;
   const tagCodes = codesFromTags(input.additiveTags);
@@ -781,9 +871,253 @@ export function analyze(input) {
       additives: { points: addPoints, max: 30, list: additives },
       processing: { points: procPoints, max: 10, nova, estimated: novaEstimated },
     },
-    reasons, eczema, ingredients, nutrients, category: isWater ? 'water' : cat,
+    reasons, eczema, eczemaScore: eczemaScore(eczema), ingredients, nutrients, category: isWater ? 'water' : cat, type: 'food',
   };
 }
+
+// ---------------------------------------------------------------------------------------------
+// ECZEMA SCORE 0-100 (every product type). 100 = no known trigger found in the listed ingredients.
+// Transparent rule (shown on screen as a breakdown):
+//   start at 100; each trigger costs HIGH 35 / MEDIUM 15 / LOW 5 points;
+//   "may contain / traces" costs half of its normal weight;
+//   triggers are taken worst first and each further one counts 70% of the one before (diminishing:
+//   the 6th sugar mention should not sink a product the way a second allergen does);
+//   any HIGH trigger (not just traces) caps the score at 49 — the same cap rule as the health score;
+//   floor 0. No ingredient list = NO score ("can't check"), never 100.
+// ---------------------------------------------------------------------------------------------
+export const ECZEMA_SCORE_RULE = { weights: { high: 35, medium: 15, low: 5 }, traceFactor: 0.5, decay: 0.7, highCap: 49 };
+export function eczemaScore(ec) {
+  if (!ec || ec.status === 'unknown') return null;
+  const R = ECZEMA_SCORE_RULE;
+  const items = ec.triggers.map((tr) => {
+    const base = R.weights[ECZ_BY_ID[tr.id].sev] || 0;          // weight of the trigger itself (traces: halved below)
+    return { id: tr.id, name: tr.name, sev: tr.sev, traces: tr.traces, base: tr.traces ? base * R.traceFactor : base };
+  }).sort((a, b) => b.base - a.base);
+  let total = 0;
+  items.forEach((it, k) => { it.penalty = Math.round(it.base * R.decay ** k * 10) / 10; total += it.penalty; });
+  let score = Math.max(0, Math.round(100 - total));
+  const capped = items.some((it) => it.sev === 'high' && !it.traces) && score > R.highCap;
+  if (capped) score = R.highCap;
+  return { score, band: bandFor(score), capped, items, total: Math.round(total * 10) / 10 };
+}
+
+// ---------------------------------------------------------------------------------------------
+// PRODUCT TYPE + the three open databases (same API, same barcode candidates, same 3 states)
+// ---------------------------------------------------------------------------------------------
+export const DATABASES = [
+  { id: 'food', name: 'Open Food Facts', host: 'world.openfoodfacts.org' },
+  { id: 'beauty', name: 'Open Beauty Facts', host: 'world.openbeautyfacts.org' },
+  { id: 'products', name: 'Open Products Facts', host: 'world.openproductsfacts.org' },
+];
+const PERSONAL_CARE_RE = /cosmetic|beauty|hygiene|personal-care|toilet|shampoo|soap|shower|bath|deodorant|toothpaste|dental|skin|hair|lotion|cream|sun|make-up|makeup|baby-care|diaper/;
+// food | cosmetic (personal care: skin, hair, body) | household (cleaners, laundry, other non-food)
+export function productTypeOf(db, categories = []) {
+  if (db === 'beauty') return 'cosmetic';
+  if (db === 'products') return categories.some((c) => PERSONAL_CARE_RE.test(String(c))) ? 'cosmetic' : 'household';
+  return 'food';
+}
+// Combine the per-database answers (in DATABASES order). Found anywhere wins (food first);
+// otherwise any failure means "failed" (never claim "not found" when a database did not answer).
+export function combineLookups(results) {
+  const hit = results.find((r) => r.state === 'found');
+  if (hit) return hit;
+  return { state: results.some((r) => r.state === 'failed') ? 'failed' : 'notfound' };
+}
+// A photo has no database to say what it is: an INCI-style list (aqua, parfum, cetearyl alcohol...) is a
+// skin product; bleach / surfactant / disinfectant words make it household; anything else is food.
+const INCI_MARKERS = ['aqua', 'parfum', 'fragrance', 'cetearyl alcohol', 'cetyl alcohol', 'stearyl alcohol', 'glyceryl stearate', 'dimethicone',
+  'sodium laureth sulfate', 'sodium lauryl sulfate', 'cocamidopropyl betaine', 'phenoxyethanol', 'methylparaben', 'propylparaben', 'methylisothiazolinone',
+  'tocopheryl acetate', 'butyrospermum parkii', 'caprylic/capric triglyceride', 'paraffinum liquidum', 'petrolatum', 'carbomer', 'disodium edta',
+  'tetrasodium edta', 'ci 77891', 'polysorbate 20', 'peg-', 'ceteareth', 'steareth', 'laureth', 'limonene', 'linalool', 'panthenol', 'allantoin'];
+const HOUSEHOLD_MARKERS = ['sodium hypochlorite', 'hypochlorite', 'bleach', 'benzalkonium chloride', 'quaternary ammonium', 'ammonium hydroxide', 'ammonia',
+  'surfactant', 'surfactants', 'anionic surfactants', 'nonionic surfactants', 'non-ionic surfactants', 'optical brighteners', 'enzymes', 'zeolites', 'phosphonates',
+  'polycarboxylates', 'disinfectant', 'detergent'];
+export function guessProductTypeFromText(text) {
+  const t = norm(text);
+  if (!t) return 'food';
+  const count = (list) => list.filter((w) => (w.endsWith('-') ? t.includes(w) : wordRe(w).test(t))).length;
+  const house = count(HOUSEHOLD_MARKERS), inci = count(INCI_MARKERS);
+  if (house >= 2) return 'household';
+  if (inci >= 2) return 'cosmetic';
+  return 'food';
+}
+
+// ---------------------------------------------------------------------------------------------
+// HARMFUL-INGREDIENT table for non-food products (cosmetics, personal care, household cleaners).
+// level: high | medium | low.  Primary sources only (EWG Skin Deep is NOT used — it is not a primary source):
+//  [EU-II]   EU Cosmetics Regulation 1223/2009 Annex II (prohibited) / III (restricted) / V (preservatives), with
+//            amendments: 2016/1198 + 2017/1224 (MI/MCI), 358/2014 (parabens), 2017/1410 (HICC, atranol),
+//            2019/831 (formaldehyde -> Annex II), 2021/1902 (lilial -> Annex II), 2022/1176 (benzophenone-3),
+//            2022/1181 ("releases formaldehyde" warning for releasers).
+//  [SCCS]    EU Scientific Committee on Consumer Safety opinions: SCCS/1514/13 (parabens), SCCS/1625/20
+//            (benzophenone-3), SCCS/1636/21 (BHT), SCCS/1575/16 (phenoxyethanol), SCCS/1414/11 (triclosan),
+//            SCCS/1459/11 (fragrance allergens).
+//  [IARC]    IARC Monographs: formaldehyde Group 1 (vol. 100F), coal tar Group 1 (100F), BHA 2B (vol. 40),
+//            diethanolamine 2B (vol. 101), coconut-oil diethanolamine condensate 2B (vol. 101), 1,4-dioxane 2B (vol. 71).
+//  [ECHA]    ECHA Candidate List of Substances of Very High Concern (SVHC): DBP, DEHP, BBP (toxic for reproduction),
+//            musk xylene (vPvB), triclosan (assessed as PBT-concern under biocides).
+//  [FDA16]   US FDA final rule 2016 (81 FR 61106): triclosan + 18 other antiseptics removed from consumer washes.
+//  [EPA-SC]  US EPA Safer Choice criteria (chlorine bleach and ammonia are not "safer chemical" ingredients;
+//            quats are respiratory/skin irritants — AOEC lists benzalkonium chloride as an asthmagen).
+//  [ACDS]    American Contact Dermatitis Society Allergen of the Year (see the skin-contact eczema table above).
+// Points off the 100-point "harmful ingredients" score: high 30, medium 15, low 5; any HIGH caps at 49.
+// ---------------------------------------------------------------------------------------------
+const Hz = (id, level, label, why, words, opts = {}) => ({ id, level, label, why, words, not: opts.not || [], re: opts.re || null });
+export const HAZARDS = [
+  // --- HIGH ---
+  Hz('mi', 'high', { en: 'Methylisothiazolinone / MCI', vi: 'Methylisothiazolinone / MCI' },
+    { en: 'strong skin sensitiser — banned in EU leave-on cosmetics, tightly limited in rinse-off (EU 2016/1198, 2017/1224)', vi: 'chất gây mẫn cảm da mạnh — bị cấm trong mỹ phẩm để lại trên da ở EU, bị giới hạn chặt trong sản phẩm rửa trôi (EU 2016/1198, 2017/1224)' },
+    ['methylisothiazolinone', 'methylchloroisothiazolinone', 'kathon cg']),
+  Hz('formaldehyde', 'high', { en: 'Formaldehyde', vi: 'Formaldehyde' },
+    { en: 'known human carcinogen (IARC Group 1) and skin allergen; prohibited in EU cosmetics (EU 2019/831)', vi: 'chất gây ung thư ở người (IARC nhóm 1) và gây dị ứng da; bị cấm trong mỹ phẩm ở EU (EU 2019/831)' },
+    ['formaldehyde', 'formalin', 'methylene glycol', 'paraformaldehyde']),
+  Hz('fa-releaser', 'high', { en: 'Formaldehyde-releasing preservative', vi: 'Chất bảo quản giải phóng formaldehyde' },
+    { en: 'slowly releases formaldehyde (IARC Group 1 carcinogen); EU requires a "releases formaldehyde" warning (EU 2022/1181); common skin allergen (ACDS)', vi: 'giải phóng dần formaldehyde (chất gây ung thư IARC nhóm 1); EU bắt buộc cảnh báo “giải phóng formaldehyde” (EU 2022/1181); hay gây dị ứng da (ACDS)' },
+    ['dmdm hydantoin', 'quaternium-15', 'quaternium 15', 'imidazolidinyl urea', 'diazolidinyl urea', 'bronopol', '2-bromo-2-nitropropane-1,3-diol', 'sodium hydroxymethylglycinate', 'methenamine']),
+  Hz('banned-fragrance', 'high', { en: 'Fragrance chemical banned in the EU', vi: 'Hương liệu bị cấm ở EU' },
+    { en: 'lilial (toxic for reproduction, EU 2021/1902), HICC/lyral and atranol (strong allergens, EU 2017/1410), musk ambrette', vi: 'lilial (độc cho sinh sản, EU 2021/1902), HICC/lyral và atranol (gây dị ứng mạnh, EU 2017/1410), musk ambrette' },
+    ['butylphenyl methylpropional', 'lilial', 'hydroxyisohexyl 3-cyclohexene carboxaldehyde', 'lyral', 'atranol', 'chloroatranol', 'musk ambrette']),
+  Hz('triclosan', 'high', { en: 'Triclosan / triclocarban', vi: 'Triclosan / triclocarban' },
+    { en: 'antibacterial removed from US consumer soaps (FDA 2016 rule) — no benefit shown, hormone and resistance concerns (SCCS/1414/11)', vi: 'chất kháng khuẩn bị loại khỏi xà phòng tiêu dùng ở Mỹ (FDA 2016) — không chứng minh được lợi ích, lo ngại nội tiết và kháng thuốc (SCCS/1414/11)' },
+    ['triclosan', 'triclocarban']),
+  Hz('phthalate-svhc', 'high', { en: 'Phthalate (DBP / DEHP / BBP)', vi: 'Phthalate (DBP / DEHP / BBP)' },
+    { en: 'toxic for reproduction — EU Substance of Very High Concern (ECHA SVHC) and prohibited in EU cosmetics (Annex II)', vi: 'độc cho sinh sản — chất rất đáng lo ngại ở EU (ECHA SVHC), bị cấm trong mỹ phẩm EU (Phụ lục II)' },
+    ['dibutyl phthalate', 'dbp', 'diethylhexyl phthalate', 'di(2-ethylhexyl) phthalate', 'dehp', 'benzyl butyl phthalate', 'butyl benzyl phthalate', 'bbp']),
+  Hz('banned-parabens', 'high', { en: 'Paraben banned in the EU (isopropyl/isobutyl/phenyl/benzyl/pentyl)', vi: 'Paraben bị cấm ở EU (isopropyl/isobutyl/phenyl/benzyl/pentyl)' },
+    { en: 'not enough safety data — prohibited in EU cosmetics since 2014 (EU 358/2014)', vi: 'thiếu dữ liệu an toàn — bị cấm trong mỹ phẩm EU từ 2014 (EU 358/2014)' },
+    ['isopropylparaben', 'isobutylparaben', 'phenylparaben', 'benzylparaben', 'pentylparaben']),
+  Hz('coal-tar', 'high', { en: 'Coal tar', vi: 'Hắc ín than đá (coal tar)' },
+    { en: 'known human carcinogen (IARC Group 1); prohibited in EU cosmetics (Annex II)', vi: 'chất gây ung thư ở người (IARC nhóm 1); bị cấm trong mỹ phẩm EU (Phụ lục II)' },
+    ['coal tar', 'coal-tar']),
+  Hz('dea', 'high', { en: 'Diethanolamine (DEA) / cocamide DEA', vi: 'Diethanolamine (DEA) / cocamide DEA' },
+    { en: 'possible carcinogen (IARC 2B, vol. 101); DEA itself is prohibited in EU cosmetics (Annex II)', vi: 'có thể gây ung thư (IARC 2B); bản thân DEA bị cấm trong mỹ phẩm EU (Phụ lục II)' },
+    ['diethanolamine', 'cocamide dea', 'lauramide dea', 'oleamide dea', 'linoleamide dea'], { re: /(?<![\p{L}\p{N}])dea(?![\p{L}\p{N}-])/u }),
+  Hz('musk-xylene', 'high', { en: 'Nitro musk (musk xylene)', vi: 'Xạ hương nitro (musk xylene)' },
+    { en: 'very persistent and bioaccumulative — EU Substance of Very High Concern (ECHA SVHC, vPvB)', vi: 'rất khó phân huỷ và tích tụ sinh học — chất rất đáng lo ngại ở EU (ECHA SVHC)' },
+    ['musk xylene']),
+  Hz('bha', 'high', { en: 'BHA', vi: 'BHA' },
+    { en: 'possible carcinogen (IARC 2B)', vi: 'có thể gây ung thư (IARC 2B)' },
+    ['butylated hydroxyanisole']),
+  // --- MEDIUM ---
+  Hz('fragrance', 'medium', { en: 'Fragrance / parfum (undisclosed mix)', vi: 'Hương liệu / parfum (hỗn hợp không công bố)' },
+    { en: 'can hide dozens of chemicals; the leading cause of cosmetic skin allergy — EU requires the main allergens to be named (EU 1223/2009 Annex III, SCCS/1459/11)', vi: 'có thể che hàng chục hoá chất; nguyên nhân hàng đầu gây dị ứng da do mỹ phẩm — EU bắt buộc ghi tên các chất gây dị ứng chính (EU 1223/2009, SCCS/1459/11)' },
+    ['fragrance', 'parfum', 'perfume', 'masking fragrance', 'hương liệu'],
+    { not: ['fragrance free', 'fragrance-free', 'without fragrance', 'unscented', 'sans parfum', 'không hương liệu'] }),
+  Hz('strong-frag-allergen', 'medium', { en: 'Strong fragrance allergen (isoeugenol, cinnamal, hydroxycitronellal…)', vi: 'Chất hương liệu gây dị ứng mạnh (isoeugenol, cinnamal, hydroxycitronellal…)' },
+    { en: 'established human contact allergen with EU concentration limits (SCCS/1459/11; EU Annex III)', vi: 'chất gây dị ứng tiếp xúc đã được xác nhận, bị EU giới hạn nồng độ (SCCS/1459/11; Phụ lục III)' },
+    ['isoeugenol', 'cinnamal', 'cinnamyl alcohol', 'hydroxycitronellal', 'evernia prunastri', 'oakmoss', 'evernia furfuracea', 'treemoss', 'musk ketone']),
+  Hz('pb-parabens', 'medium', { en: 'Propylparaben / butylparaben', vi: 'Propylparaben / butylparaben' },
+    { en: 'weak hormone-like activity — EU limits them to 0.14% and bans them in leave-on nappy-area products for under-3s (EU 358/2014, SCCS/1514/13)', vi: 'hoạt tính giống hormone yếu — EU giới hạn 0,14% và cấm trong sản phẩm vùng tã cho trẻ dưới 3 tuổi (EU 358/2014, SCCS/1514/13)' },
+    ['propylparaben', 'butylparaben', 'sodium propylparaben', 'sodium butylparaben']),
+  Hz('oxybenzone', 'medium', { en: 'Oxybenzone (benzophenone-3)', vi: 'Oxybenzone (benzophenone-3)' },
+    { en: 'possible hormone disruptor — EU cut the allowed amount (SCCS/1625/20; EU 2022/1176)', vi: 'có thể gây rối loạn nội tiết — EU đã giảm mức cho phép (SCCS/1625/20; EU 2022/1176)' },
+    ['oxybenzone', 'benzophenone-3', 'benzophenone 3']),
+  Hz('ppd', 'medium', { en: 'Hair dye PPD (p-phenylenediamine)', vi: 'Thuốc nhuộm PPD' },
+    { en: 'strong contact allergen; restricted in EU hair dyes (Annex III; ACDS 2006)', vi: 'gây dị ứng tiếp xúc mạnh; bị giới hạn trong thuốc nhuộm tóc ở EU (Phụ lục III; ACDS 2006)' },
+    ['p-phenylenediamine', 'paraphenylenediamine', 'phenylenediamine', 'toluene-2,5-diamine']),
+  Hz('bleach', 'medium', { en: 'Chlorine bleach (sodium hypochlorite)', vi: 'Thuốc tẩy clo (natri hypoclorit)' },
+    { en: 'corrosive to skin and eyes; NEVER mix with ammonia or acids (toxic gas); not a Safer Choice ingredient (US EPA)', vi: 'ăn mòn da và mắt; KHÔNG BAO GIỜ trộn với amoniac hay axit (sinh khí độc); không thuộc danh sách an toàn hơn của EPA Mỹ' },
+    ['sodium hypochlorite', 'hypochlorite', 'chlorine bleach', 'javel'], { not: ['non-chlorine bleach', 'chlorine-free'] }),
+  Hz('ammonia', 'medium', { en: 'Ammonia', vi: 'Amoniac' },
+    { en: 'irritates skin, eyes and lungs; never mix with bleach (US EPA Safer Choice criteria)', vi: 'kích ứng da, mắt và phổi; không bao giờ trộn với thuốc tẩy (tiêu chí Safer Choice của EPA Mỹ)' },
+    ['ammonia', 'ammonium hydroxide']),
+  Hz('quats', 'medium', { en: 'Quat disinfectant (benzalkonium chloride…)', vi: 'Chất khử khuẩn “quat” (benzalkonium chloride…)' },
+    { en: 'skin irritant and recognised asthma trigger (AOEC asthmagen list)', vi: 'gây kích ứng da và là tác nhân gây hen đã được ghi nhận (danh sách AOEC)' },
+    ['benzalkonium chloride', 'benzethonium chloride', 'didecyldimethylammonium chloride', 'alkyl dimethyl benzyl ammonium chloride', 'quaternary ammonium']),
+  // --- LOW ---
+  Hz('frag-allergen', 'low', { en: 'Labelled fragrance allergen (limonene, linalool…)', vi: 'Chất gây dị ứng hương liệu có ghi (limonene, linalool…)' },
+    { en: 'allergenic mainly once oxidised by air; EU requires them on the label above a small amount (SCCS/1459/11)', vi: 'gây dị ứng chủ yếu khi bị ôxy hoá; EU bắt buộc ghi nhãn khi vượt mức nhỏ (SCCS/1459/11)' },
+    ['limonene', 'linalool', 'citronellol', 'geraniol', 'citral', 'eugenol', 'coumarin', 'benzyl salicylate', 'benzyl benzoate', 'benzyl cinnamate', 'farnesol', 'alpha-isomethyl ionone', 'amyl cinnamal', 'hexyl cinnamal', 'anise alcohol', 'benzyl alcohol']),
+  Hz('dep', 'low', { en: 'Diethyl phthalate (DEP)', vi: 'Diethyl phthalate (DEP)' },
+    { en: 'fragrance solvent; considered safe at cosmetic levels by the SCCS — unlike DBP/DEHP it is not an SVHC', vi: 'dung môi hương liệu; SCCS coi là an toàn ở mức trong mỹ phẩm — khác DBP/DEHP, không phải SVHC' },
+    ['diethyl phthalate', 'dep']),
+  Hz('me-parabens', 'low', { en: 'Methylparaben / ethylparaben', vi: 'Methylparaben / ethylparaben' },
+    { en: 'judged safe at permitted levels (SCCS/1514/13) — far less concern than propyl/butyl', vi: 'được đánh giá an toàn ở mức cho phép (SCCS/1514/13) — ít đáng lo hơn nhiều so với propyl/butyl' },
+    ['methylparaben', 'ethylparaben', 'sodium methylparaben', 'sodium ethylparaben']),
+  Hz('bht', 'low', { en: 'BHT', vi: 'BHT' },
+    { en: 'antioxidant judged safe in cosmetics up to 0.8% (SCCS/1636/21)', vi: 'chất chống ôxy hoá được đánh giá an toàn trong mỹ phẩm tới 0,8% (SCCS/1636/21)' },
+    ['bht', 'butylated hydroxytoluene']),
+  Hz('sls', 'low', { en: 'Sodium lauryl sulfate', vi: 'Sodium lauryl sulfate' },
+    { en: 'harsh foaming agent — a skin irritant, not a toxic one', vi: 'chất tạo bọt mạnh — gây kích ứng da, không độc' },
+    ['sodium lauryl sulfate', 'ammonium lauryl sulfate', 'sodium dodecyl sulfate']),
+  Hz('capb', 'low', { en: 'Cocamidopropyl betaine', vi: 'Cocamidopropyl betaine' },
+    { en: 'mild foaming agent; occasional skin allergen (ACDS 2004)', vi: 'chất tạo bọt nhẹ; đôi khi gây dị ứng da (ACDS 2004)' },
+    ['cocamidopropyl betaine']),
+  Hz('pg', 'low', { en: 'Propylene glycol', vi: 'Propylene glycol' },
+    { en: 'low toxicity; an occasional skin irritant/allergen (ACDS 2018)', vi: 'độc tính thấp; đôi khi gây kích ứng/dị ứng da (ACDS 2018)' },
+    ['propylene glycol']),
+  Hz('lanolin', 'low', { en: 'Lanolin', vi: 'Lanolin' },
+    { en: 'safe moisturiser for most; occasional allergen (ACDS 2023)', vi: 'chất dưỡng ẩm an toàn với đa số; đôi khi gây dị ứng (ACDS 2023)' },
+    ['lanolin', 'lanolin alcohol', 'wool alcohol', 'adeps lanae']),
+  Hz('essential-oil', 'low', { en: 'Essential oil', vi: 'Tinh dầu' },
+    { en: 'natural fragrance chemicals — can sensitise skin, especially once oxidised (SCCP/1155/08 on tea tree oil)', vi: 'hoá chất hương liệu tự nhiên — có thể gây mẫn cảm da, nhất là khi bị ôxy hoá (SCCP/1155/08)' },
+    ['tea tree oil', 'melaleuca alternifolia', 'lavender oil', 'lavandula angustifolia oil', 'peppermint oil', 'mentha piperita oil', 'eucalyptus oil', 'eucalyptus globulus leaf oil', 'citrus aurantium dulcis peel oil', 'citrus limon peel oil', 'rosmarinus officinalis leaf oil', 'cananga odorata', 'essential oil']),
+  Hz('tea', 'low', { en: 'Triethanolamine (TEA)', vi: 'Triethanolamine (TEA)' },
+    { en: 'pH adjuster; restricted in EU (Annex III) because it can form nitrosamines with some ingredients', vi: 'chất điều chỉnh pH; bị giới hạn ở EU (Phụ lục III) vì có thể tạo nitrosamin với một số thành phần' },
+    ['triethanolamine', 'tea-lauryl sulfate'], { re: /(?<![\p{L}\p{N}])tea(?=[- ](?:lauryl|laureth|cocoyl|dodecylbenzenesulfonate))/u }),
+  Hz('ethoxylated', 'low', { en: 'Ethoxylated ingredient (PEG / "-eth")', vi: 'Thành phần ethoxyl hoá (PEG / “-eth”)' },
+    { en: 'safe itself, but the process can leave traces of 1,4-dioxane (IARC 2B) — a contamination risk, not an ingredient risk', vi: 'bản thân an toàn, nhưng quá trình sản xuất có thể để lại vết 1,4-dioxane (IARC 2B) — rủi ro tạp nhiễm, không phải của thành phần' },
+    ['sodium laureth sulfate', 'ammonium laureth sulfate', 'laureth', 'ceteareth', 'steareth', 'oleth', 'pareth', 'ceteth', 'polysorbate', '1,4-dioxane'],
+    { re: /(?<![\p{L}\p{N}])peg-\d|(?<![\p{L}\p{N}])\w+eth-\d/u }),
+  Hz('brightener', 'low', { en: 'Optical brightener', vi: 'Chất làm trắng quang học' },
+    { en: 'stays on fabric to look "whiter"; poorly biodegradable, occasional skin irritant', vi: 'bám trên vải để trông “trắng hơn”; khó phân huỷ, đôi khi kích ứng da' },
+    ['optical brightener', 'optical brighteners', 'fluorescent whitening agent', 'distyrylbiphenyl', 'stilbene']),
+  Hz('dyes', 'low', { en: 'Synthetic colour (FD&C / D&C)', vi: 'Phẩm màu tổng hợp (FD&C / D&C)' },
+    { en: 'coal-tar-derived dyes, purified for cosmetic use; occasional skin allergen', vi: 'phẩm màu gốc hắc ín, đã tinh chế cho mỹ phẩm; đôi khi gây dị ứng da' },
+    ['fd&c', 'd&c']),
+  Hz('phenoxyethanol', 'low', { en: 'Phenoxyethanol', vi: 'Phenoxyethanol' },
+    { en: 'preservative judged safe up to 1% (SCCS/1575/16)', vi: 'chất bảo quản được đánh giá an toàn tới 1% (SCCS/1575/16)' },
+    ['phenoxyethanol']),
+];
+const HAZARD_POINTS = { high: 30, medium: 15, low: 5 };
+const LEVEL_RATING = { high: 'bad', medium: 'caution', low: 'neutral' };
+// common harmless INCI / cleaner bases, so they show "neutral" instead of "not rated"
+const NONFOOD_SAFE = ['aqua', 'water', 'eau', 'glycerin', 'glycerine', 'cetearyl alcohol', 'cetyl alcohol', 'stearyl alcohol', 'myristyl alcohol', 'stearic acid',
+  'glyceryl stearate', 'dimethicone', 'tocopherol', 'tocopheryl acetate', 'panthenol', 'niacinamide', 'allantoin', 'sodium chloride', 'citric acid', 'sodium citrate',
+  'xanthan gum', 'butyrospermum parkii', 'shea butter', 'caprylic/capric triglyceride', 'paraffinum liquidum', 'paraffin', 'petrolatum', 'mineral oil', 'cera microcristallina',
+  'squalane', 'hyaluronic acid', 'sodium hyaluronate', 'carbomer', 'sodium hydroxide', 'potassium hydroxide', 'disodium edta', 'tetrasodium edta', 'sodium benzoate',
+  'potassium sorbate', 'sodium carbonate', 'sodium bicarbonate', 'sodium percarbonate', 'zinc oxide', 'titanium dioxide', 'ci 77891', 'helianthus annuus seed oil',
+  'magnesium sulfate', 'decyl glucoside', 'coco-glucoside', 'lauryl glucoside', 'sodium lauroyl glycinate', 'sodium lauroyl isethionate', 'lauric acid', 'zeolite', 'enzymes', 'protease', 'amylase'];
+const NONFOOD_SAFE_WHY = { en: 'common base ingredient, low concern', vi: 'thành phần nền phổ biến, ít đáng lo' };
+export function hazardsInText(text) {
+  const t = norm(text);
+  return HAZARDS.filter((h) => matchesAny(t, h.words, h.not) || (h.re && h.re.test(stripPhrases(t, h.not))));
+}
+function rateNonFoodIngredient(text) {
+  const hz = hazardsInText(text).sort((a, b) => HAZARD_POINTS[b.level] - HAZARD_POINTS[a.level]);
+  if (hz.length) return { rating: LEVEL_RATING[hz[0].level], why: { en: `${hz[0].label.en}: ${hz[0].why.en}`, vi: `${hz[0].label.vi}: ${hz[0].why.vi}` }, hazard: hz[0] };
+  if (matchesAny(norm(text), NONFOOD_SAFE)) return { rating: 'neutral', why: NONFOOD_SAFE_WHY };
+  return { rating: 'unrated', why: NOT_RATED };
+}
+
+// Cosmetics / personal care / household: "harmful ingredients" score 0-100 (100 = nothing concerning found)
+// instead of the nutrition score; contact-eczema table instead of the food-trigger table.
+function analyzeNonFood(input, type) {
+  const tree = input.ingredientTree && input.ingredientTree.length ? input.ingredientTree : parseIngredientsText(input.ingredientsText);
+  const hasText = !!(input.ingredientsText && input.ingredientsText.trim()) || tree.length > 0;
+  const ingredients = rateIngredientTree(tree, [], { rate: (text) => rateNonFoodIngredient(text), table: ECZEMA_CONTACT });
+  const found = new Map();
+  for (const ing of ingredients) for (const hz of hazardsInText(ing.text)) if (!found.has(hz.id)) found.set(hz.id, { hz, via: ing.text });
+  if (!tree.length && input.ingredientsText) for (const hz of hazardsInText(input.ingredientsText)) if (!found.has(hz.id)) found.set(hz.id, { hz, via: '' });
+  const list = [...found.values()].map(({ hz, via }) => ({ id: hz.id, code: '', risk: hz.level === 'medium' ? 'moderate' : hz.level, label: hz.label, why: hz.why, via }))
+    .sort((a, b) => RISK_POINTS[b.risk] - RISK_POINTS[a.risk]);
+  let score = null, capped = false;
+  if (hasText) {
+    score = Math.max(0, 100 - list.reduce((s, x) => s + HAZARD_POINTS[x.risk === 'moderate' ? 'medium' : x.risk], 0));
+    if (list.some((x) => x.risk === 'high') && score > 49) { score = 49; capped = true; }
+  }
+  const reasons = [];
+  if (capped) reasons.push({ kind: 'bad', en: 'Has a high-concern ingredient, so the score is capped at 49', vi: 'Có thành phần đáng lo ngại cao nên điểm bị giới hạn ở 49' });
+  for (const x of list) reasons.push({ kind: x.risk === 'low' ? 'info' : 'bad', en: `Contains ${x.label.en} — ${x.why.en}`, vi: `Có ${x.label.vi} — ${x.why.vi}` });
+  if (hasText && !list.length) reasons.push({ kind: 'good', en: 'No concerning ingredients found in our list', vi: 'Không thấy thành phần đáng lo trong danh sách của chúng tôi' });
+  const eczema = eczemaCheck({ ingredients, hasIngredientText: hasText, containsText: input.containsText || '', mayContainText: '', table: ECZEMA_CONTACT });
+  return {
+    type, score, partial: false, capped, missing: hasText ? [] : ['ingredients'], band: score == null ? null : bandFor(score),
+    parts: { harm: { points: score, list } },
+    reasons, eczema, eczemaScore: eczemaScore(eczema), ingredients, nutrients: {}, category: type,
+  };
+}
+
 
 // ---------------------------------------------------------------------------------------------
 // Adapters: OFF product -> analyze() input; OCR text -> analyze() input
@@ -806,7 +1140,7 @@ export function nutrientsFromOff(nm = {}) {
 export function pickIngredientText(p, lang = 'en') {
   return (lang === 'vi' && p.ingredients_text_vi) || p.ingredients_text_en || p.ingredients_text || p.ingredients_text_vi || '';
 }
-export function inputFromOff(p) {
+export function inputFromOff(p, db = 'food') {
   const ns23 = p.nutriscore && p.nutriscore['2023'] && p.nutriscore['2023'].data ? p.nutriscore['2023'].data : {};
   const flags = {};
   for (const k of ['is_beverage', 'is_cheese', 'is_fat_oil_nuts_seeds', 'is_red_meat_product', 'is_water']) if (ns23[k] != null) flags[k] = Number(ns23[k]);
@@ -816,7 +1150,7 @@ export function inputFromOff(p) {
   return {
     source: 'off', nutrients: nutrientsFromOff(p.nutriments), categories: p.categories_tags || [], offFlags: flags,
     nova: p.nova_group, ingredientTree: tree, ingredientsText: text, allergens: p.allergens_tags || [], traces: p.traces_tags || [],
-    additiveTags: p.additives_tags || [],
+    additiveTags: p.additives_tags || [], productType: productTypeOf(db, p.categories_tags || []),
   };
 }
 
@@ -882,30 +1216,103 @@ export function per100FromServing(f) {
     salt: Math.round((f.sodium_mg / 1000) * 2.5 * k * 1000) / 1000, fiber: r(f.fiber), protein: r(f.protein), fvl: null,
   };
 }
+// "INGREDIENTS:" as OCR really reads it: "INGRED;ENTS:", "INGRED!ENTS:", "INGREDIEN1S:", "Ingredients" (no colon)
+const ING_HEAD_RE = /\b(?:ingred\S{0,6}\s*[:;.]|ingred[il1!;|]?e?n[t1]?s?\b|thành phần\s*[:;.]?)\s*/i;
+// The allergen statement "CONTAINS WHEAT AND SOY." / "CONTAINS: MILK" — but NOT the in-list
+// "CONTAINS LESS THAN 2% OF:" (that line always has a % sign or "less than").
+const CONTAINS_RE = /(?<!may\s)\bcontains\b(?![^\n]*%)(?!\s+l\S{0,4}s\s+than)\s*[:;]?\s*([^\n]+)/i;
+// OCR turns a dagger footnote mark into ! ' " ’ ” ? (and swallows the comma after it):
+// "BEEF EXTRACT" BLEF FAT! BLACK PEPPER! CITRIC ACID" -> "BEEF EXTRACT, BLEF FAT, BLACK PEPPER, CITRIC ACID"
+function cleanOcrIngredients(s) {
+  return s.replace(/([A-Za-z])[†‡!"'’”?]+\s*([,.;)\]])/g, '$1$2')
+    .replace(/([A-Za-z])[†‡!"'’”?]+\s+(?=[(\[])/g, '$1 ')
+    .replace(/([A-Za-z])[†‡!"'’”?]+\s+(?=[A-Z])/g, '$1, ')
+    .replace(/\b([A-Z]{3,})t\b/g, '$1')                                // "ONIONt" (dagger read as a small t)
+    .replace(/\s+/g, ' ').trim();
+}
+// OCR junk tokens ("ni", "J", "| } 0 |") are not ingredients: keep only items with a real word in them
+const realWord = (s) => /[\p{L}]{3,}/u.test(s);
+function pruneOcrTree(tree) {
+  return tree.filter((i) => realWord(i.text) || i.children.length).map((i) => ({ ...i, children: pruneOcrTree(i.children) }));
+}
 export function extractLabelText(rawText) {
   const t = String(rawText || '').replace(/\r/g, '');
-  const m = t.match(/ingred[il1]ents?\s*[:;.]?\s*/i);
+  const m = t.match(ING_HEAD_RE);
   let ingredients = '';
   if (m) {
     const rest = t.slice(m.index + m[0].length);
-    const stop = rest.search(/\n\s*\n|contains\s*[:;]|may\s+contain|manufactured|distributed|produced\s+(?:by|in)|nutrition\s+facts|allergen/i);
-    ingredients = (stop >= 0 ? rest.slice(0, stop) : rest).replace(/-\n/g, '').replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+    const stop = rest.search(/\n\s*\n|(?<!may\s)\bcontains\s*[:;]|\n\s*contains\b(?![^\n]*%)(?!\s+l\S{0,4}s\s+than)|may\s+contain|manufactured|distributed|produced\s+(?:by|in)|nutrition\s+facts|allergen/i);
+    ingredients = (stop >= 0 ? rest.slice(0, stop) : rest)
+      .replace(/-[ \t]*\n[ \t]*(?=(?:and|or|&)\b)/gi, '- ').replace(/-\n/g, '').replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+    ingredients = cleanOcrIngredients(ingredients);
   }
-  const c = t.match(/(?<!may\s)contains\s*[:;]\s*([^\n]+)/i);
+  const c = t.match(CONTAINS_RE);
   const mc = t.match(/may\s+contain[^:\n]*[:]?\s*([^\n]+)/i);
-  return { ingredients, contains: c ? c[1].trim() : '', mayContain: mc ? mc[1].trim() : '' };
+  return { ingredients, contains: c ? c[1].trim() : '', mayContain: mc ? mc[1].trim() : '', foundHeading: !!m };
+}
+
+// ---- OCR read quality: used to pick which way up the photo is (0/90/180/270) ----
+// score = INGREDIENTS/Nutrition-Facts keyword (30) + mean word confidence / 2 (0-50) + label words recognised (0-40).
+// A sideways or upside-down read is gibberish: low confidence and almost no real label words.
+const LABEL_KEYWORD_RE = /ingred\S{0,6}|nutrition\s*facts|serving\s*size|thành phần/i;
+let LABEL_VOCAB = null;
+function labelVocab() {
+  if (LABEL_VOCAB) return LABEL_VOCAB;
+  const words = new Set(['ingredients', 'contains', 'less', 'than', 'and', 'nutrition', 'facts', 'serving', 'size', 'calories', 'total', 'fat',
+    'sodium', 'sugars', 'protein', 'carbohydrate', 'fiber', 'daily', 'value', 'water', 'flour', 'oil', 'acid', 'extract', 'starch', 'powder',
+    'natural', 'flavor', 'flavors', 'color', 'enriched', 'modified', 'dried', 'sauce', 'paste', 'protein', 'isolate', 'mixture', 'manufactured',
+    'distributed', 'may', 'contain', 'per', 'container', 'amount', 'cholesterol', 'vitamin', 'calcium', 'iron', 'potassium', 'includes', 'added']);
+  const addAll = (list) => { for (const w of list) for (const part of norm(w).split(/[^\p{L}]+/u)) if (part.length >= 3) words.add(part); };
+  for (const e of ECZEMA) addAll(e.words);
+  for (const r of ING_RULES) addAll(r.words);
+  for (const a of ADDITIVES) addAll(a.names);
+  LABEL_VOCAB = words;
+  return words;
+}
+export function ocrReadScore(text, meanConfidence) {
+  const t = String(text || '');
+  const vocab = labelVocab();
+  const tokens = norm(t).split(/[^\p{L}]+/u).filter((w) => w.length >= 3);
+  let dict = 0;
+  for (const w of tokens) if (vocab.has(w) || vocab.has(w.replace(/e?s$/, ''))) dict++;
+  const keyword = LABEL_KEYWORD_RE.test(t);
+  const conf = Math.max(0, Math.min(100, Number(meanConfidence) || 0));
+  const score = Math.round((keyword ? 30 : 0) + conf / 2 + Math.min(40, dict));
+  return { score, keyword, conf: Math.round(conf), dictWords: dict };
+}
+// Orientation search plan (the page does the pixel work; these are the rules):
+// read a small copy at 0° first; if it is good enough stop, else try 90°, 270°, 180° and keep the best,
+// then read the winner at full size. Sizes measured on the real sideways Nongshim photo (4000x3000):
+// 1000px probe = clearly separates right/wrong way up; 2000px read = most correct words (159 vs 151 @1600, 156 @2500).
+export const OCR_PLAN = { order: [0, 90, 270, 180], probePx: 1000, readPx: 2000, goodEnough: 75 };
+
+// What kind of read did the photo give? Drives the message on the result page.
+//   full             nutrition panel + ingredients
+//   ingredients_only ingredient list, no Nutrition Facts panel (health score needs the barcode / a panel photo)
+//   facts_only       panel but no ingredient list
+//   unreadable       nothing usable was read
+export function photoOutcome(facts, label) {
+  const anyFact = ['kcal', 'fat', 'satfat', 'sodium_mg', 'sugars', 'protein', 'fiber'].some((k) => facts[k] != null);
+  const hasIng = !!(label.ingredients && label.ingredients.trim()) || !!label.contains;
+  if (hasIng && anyFact) return 'full';
+  if (hasIng) return 'ingredients_only';
+  if (anyFact) return 'facts_only';
+  return 'unreadable';
 }
 export function inputFromOcr(rawText) {
   const facts = parseNutritionFacts(rawText);
   const label = extractLabelText(rawText);
   const per100 = per100FromServing(facts);
   const bev = facts.servingUnit === 'ml';
+  const anyFact = ['kcal', 'satfat', 'sodium_mg', 'sugars'].some((k) => facts[k] != null);
+  const productType = anyFact ? 'food' : guessProductTypeFromText(label.ingredients || rawText);
   return {
     input: {
+      productType,
       source: 'photo', nutrients: per100 || {}, categories: bev ? ['en:beverages'] : [], offFlags: bev ? { is_beverage: 1 } : {},
-      nova: null, ingredientTree: [], ingredientsText: label.ingredients, allergens: [], traces: [], additiveTags: [],
+      nova: null, ingredientTree: pruneOcrTree(parseIngredientsText(label.ingredients)), ingredientsText: label.ingredients, allergens: [], traces: [], additiveTags: [],
       containsText: label.contains, mayContainText: label.mayContain,
     },
-    facts, label, per100,
+    facts, label, per100, outcome: photoOutcome(facts, label),
   };
 }
