@@ -19,8 +19,12 @@
 <body>
 <header class="top">
   <h1 id="appTitle">Food Score</h1>
+  <div class="top-right">
+  <button id="algBadge" type="button" class="hdr-badge" hidden></button>
+  <button id="settingsBtn" type="button" class="hdr-gear">⚙</button>
   <div class="lang-toggle" role="group" aria-label="Ngôn ngữ / Language">
-    <button type="button" class="lang-opt" data-lang="vi" lang="vi">🇻🇳 Tiếng Việt</button><button type="button" class="lang-opt" data-lang="en" lang="en">🇺🇸 English</button>
+    <button type="button" class="lang-opt" data-lang="vi" lang="vi"><span class="lang-long">🇻🇳 Tiếng Việt</span><span class="lang-short">VI</span></button><button type="button" class="lang-opt" data-lang="en" lang="en"><span class="lang-long">🇺🇸 English</span><span class="lang-short">EN</span></button>
+  </div>
   </div>
 </header>
 
@@ -32,7 +36,7 @@
   <label class="gallery-link" id="galleryLabel"><span>🖼</span> <span data-t="gallery"></span>
     <input id="photoInput" type="file" accept="image/*" hidden>
   </label>
-  <button id="algBtn" type="button" class="alg-home-btn"></button>
+  <button id="todayBar" type="button" class="today-bar"></button>
   <form id="typeForm" class="type-form" autocomplete="off">
     <input id="codeInput" inputmode="numeric" pattern="[0-9 ]*" maxlength="16" data-ph="typePh">
     <button type="submit" class="go" data-t="go"></button>
@@ -51,6 +55,11 @@
 <main id="result" class="view" hidden></main>
 <main id="ranking" class="view" hidden></main>
 <main id="allergies" class="view" hidden></main>
+<main id="settings" class="view" hidden></main>
+<main id="profile" class="view" hidden></main>
+<main id="today" class="view" hidden></main>
+<main id="weight" class="view" hidden></main>
+<main id="plan" class="view" hidden></main>
 
 <div id="busy" class="busy" hidden><div class="spinner"></div><p id="busyText"></p><p id="busyStep" class="busy-step"></p></div>
 
@@ -59,7 +68,7 @@
   <div class="scan-top">
     <button id="scanBack" type="button" class="scan-back" data-t="camBack"></button>
     <div class="lang-toggle" role="group" aria-label="Ngôn ngữ / Language">
-      <button type="button" class="lang-opt" data-lang="vi" lang="vi">🇻🇳 Tiếng Việt</button><button type="button" class="lang-opt" data-lang="en" lang="en">🇺🇸 English</button>
+      <button type="button" class="lang-opt" data-lang="vi" lang="vi"><span class="lang-long">🇻🇳 Tiếng Việt</span><span class="lang-short">VI</span></button><button type="button" class="lang-opt" data-lang="en" lang="en"><span class="lang-long">🇺🇸 English</span><span class="lang-short">EN</span></button>
     </div>
   </div>
   <div class="frame"><div class="laser"></div></div>

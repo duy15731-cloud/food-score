@@ -10,7 +10,9 @@
 export const OFF_FIELDS = ['code', 'product_name', 'product_name_en', 'product_name_vi', 'brands', 'quantity',
   'image_front_url', 'image_front_small_url', 'image_front_thumb_url', 'image_small_url', 'image_url', 'ingredients_text', 'ingredients_text_en', 'ingredients_text_vi',
   'ingredients', 'allergens_tags', 'traces_tags', 'additives_tags', 'nutriments', 'nova_group',
-  'nutriscore_score', 'nutriscore_grade', 'nutriscore', 'categories_tags', 'lang'];
+  'nutriscore_score', 'nutriscore_grade', 'nutriscore', 'categories_tags', 'lang',
+  // portion sizes for the calorie log (v1.7; cached products without them still work — diet.js falls back to `quantity`)
+  'serving_size', 'serving_quantity', 'serving_quantity_unit', 'product_quantity', 'product_quantity_unit'];
 
 // db: 'food' (Open Food Facts) | 'beauty' (Open Beauty Facts) | 'products' (Open Products Facts) — see DATABASES
 export function offUrl(code, db = 'food') {
@@ -1491,8 +1493,19 @@ export function cancerCheck({ ingredients = [], ingredientsText = '', categories
 // https links the user may tap. Name + brand for every store; the barcode where that store's search accepts a
 // UPC (Walmart, Google Shopping) and the code is a US/Canada UPC (12 digits, or 13 starting with 0).
 // ---------------------------------------------------------------------------------------------
-export const productThumb = (p) => (p && (p.image_front_small_url || p.image_small_url || p.image_front_thumb_url || p.image_front_url || p.image_url)) || '';
-export const productPhoto = (p) => (p && (p.image_front_url || p.image_url || p.image_front_small_url || p.image_small_url)) || '';
+// Pictures always come from the product database by barcode (front of pack first, then any picture) — never from
+// the photo the user took of the label.
+export const productThumb = (p) => (p && (p.image_front_small_url || p.image_front_url || p.image_front_thumb_url || p.image_small_url || p.image_url)) || '';
+export const productPhoto = (p) => (p && (p.image_front_url || p.image_front_small_url || p.image_url || p.image_small_url)) || '';
+// Extra picture sources for a barcode the databases have no picture for (our Cloudflare Worker; see web/js/config.js).
+// Returns the URLs to ask, in order — none while the worker URL is not set.
+export function extraImageSources(code, { workerUrl = '' } = {}) {
+  const c = String(code || '').replace(/\D/g, '');
+  if (!c || !workerUrl) return [];
+  return [`${String(workerUrl).replace(/\/+$/, '')}/product?upc=${c}`];
+}
+// The worker answers {images: [...], title, brand}: use the first https picture (never http / data: / anything else).
+export const pickWorkerImage = (json) => ((json && Array.isArray(json.images) ? json.images : []).find((u) => typeof u === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(u))) || '';
 export const STORES = [
   { id: 'walmart', name: 'Walmart', url: 'https://www.walmart.com/search?q=', upc: true },
   { id: 'target', name: 'Target', url: 'https://www.target.com/s?searchTerm=' },

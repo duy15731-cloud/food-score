@@ -1,6 +1,8 @@
 // Food Score — page logic (camera, lookups, rendering). All scoring lives in engine.js.
 import * as E from './engine.js';
 import { STR } from './i18n.js';
+import { initTracker } from './tracker.js';
+import { CONFIG } from './config.js';
 
 const $ = (id) => document.getElementById(id);
 const VERSION = self.APP_VERSION || 'dev';
@@ -36,6 +38,8 @@ function applyLang() {
   if (current) renderCurrent();
   if (!$('ranking').hidden) renderRanking();
   if (!$('allergies').hidden) renderAllergies();
+  if (!$('settings').hidden) renderSettings();
+  TR.onRender();
   renderAlgHome();
 }
 document.querySelectorAll('.lang-opt').forEach((b) => {
@@ -58,24 +62,29 @@ function goHome() {                       // on-screen "Back"/"Home" buttons
   if (navState()) history.back();        // -> popstate below does the work
   else { stopScanner(); showHome(); }
 }
+// every full-page screen is a <main class="view">. SCREENS maps a history-state name to the function that shows it.
+const VIEWS = () => [...document.querySelectorAll('main.view')];
+function showOnly(id) {
+  VIEWS().forEach((m) => { m.hidden = m.id !== id; });
+  $('scanNext').hidden = id !== 'result';
+  window.scrollTo(0, 0);
+}
+const SCREENS = {};
 window.addEventListener('popstate', () => {
   const s = navState();
   if (!$('scanner').hidden && s !== 'camera') stopScanner();
   if (!s) showHome();
-  else if (s === 'ranking') showRanking();
-  else if (s === 'allergies') showAllergies();
   else if (s === 'result' && current) showResultView();
+  else if (SCREENS[s]) SCREENS[s]();
 });
 function showHome() {
   current = null;
-  $('result').hidden = true; $('ranking').hidden = true; $('allergies').hidden = true; $('home').hidden = false; $('scanNext').hidden = true;
+  showOnly('home');
   renderHistory();
-  window.scrollTo(0, 0);
 }
 function showResultView() {
-  if (!$('allergies').hidden && current) { $('allergies').hidden = true; renderCurrent(); }   // the profile may have changed
-  $('home').hidden = true; $('ranking').hidden = true; $('allergies').hidden = true; $('result').hidden = false; $('scanNext').hidden = false;
-  window.scrollTo(0, 0);
+  if ($('result').hidden && current) renderCurrent();   // the allergy profile / units may have changed on another screen
+  showOnly('result');
 }
 // busy overlay: text is kept as a string KEY so a language switch mid-way re-translates it
 const busyNow = { key: '', step: '' };
@@ -86,10 +95,10 @@ function busy(on, key = '', step = '') { busyNow.key = key; busyNow.step = step;
 const CACHE_PREFIX = 'fs_p_';
 const CACHE_DAYS = 30;
 const cacheKey = (code, db = 'food') => CACHE_PREFIX + (db === 'food' ? '' : db + '_') + code;   // food keys unchanged from v1.0
-function cacheGet(code, db = 'food') {
+function cacheGet(code, db = 'food', anyAge = false) {
   try {
     const v = JSON.parse(localStorage.getItem(cacheKey(code, db)) || 'null');
-    if (v && Date.now() - v.t < CACHE_DAYS * 864e5) return v.p;
+    if (v && (anyAge || Date.now() - v.t < CACHE_DAYS * 864e5)) return v.p;
   } catch { /* ignore */ }
   return null;
 }
@@ -133,23 +142,87 @@ async function lookup(code, format = '') {
   return { ...r, code: r.code || code, tried: cands, dbStates: all.map((x) => `${x.db}:${x.state}`) };
 }
 
+// ------------------------------------------------------------------ product pictures: database by barcode, else the extra source
+// The Open*Facts picture comes with the product. When there is none (or the code is in no database), ask the extra
+// sources from engine.js (our Cloudflare Worker, CONFIG.WORKER_URL) — a no-op until that URL is set.
+async function productImageFallback(code) {
+  for (const url of E.extraImageSources(code, { workerUrl: CONFIG.WORKER_URL })) {
+    try { const r = await fetch(url); if (r.ok) { const img = E.pickWorkerImage(await r.json().catch(() => null)); if (img) return img; } } catch { /* no picture: emoji */ }
+  }
+  return '';
+}
+const imgAsked = new Set();
+async function fillImage(code) {
+  if (!code || imgAsked.has(code)) return;
+  imgAsked.add(code);
+  const img = await productImageFallback(code);
+  if (!img) { imgAsked.delete(code); return; }   // nothing (or a failure): ask again next time
+  const list = histGet();
+  let changed = false;
+  for (const x of list) if ((x.code === code || x.bcode === code) && !x.img) { x.img = img; changed = true; }
+  if (changed) histWrite(list);
+  if (current && (current.code === code || current.barcode === code) && !current.fallbackImg) { current.fallbackImg = img; if (!$('result').hidden) renderCurrent(); }
+  if (!$('home').hidden) renderHistory();
+  if (!$('ranking').hidden) renderRankList();
+}
+
 // ------------------------------------------------------------------ history = "My products" (last 200)
 const HIST_MAX = 200;
 function histGet() { try { return JSON.parse(localStorage.getItem('fs_hist') || '[]'); } catch { return []; } }
 function histAdd(item) {
   let list = histGet().filter((x) => !(item.code && x.code === item.code) && !(item.ocr && x.ocr === item.ocr));
   list.unshift({ ...item, t: Date.now() });
-  list = list.slice(0, HIST_MAX);
+  histWrite(list.slice(0, HIST_MAX));
+}
+function histWrite(list) {
+  list = list.map(({ thumb, ...x }) => x);   // the user's own label photos are never kept or shown (pictures come from the database)
   for (let i = 0; i < 4; i++) {
     try { localStorage.setItem('fs_hist', JSON.stringify(list)); return; } catch {
-      // storage full: drop the photo text + photo thumbnails of the oldest half (the scores stay), then retry
-      list = list.map((x, j) => (j > list.length / 2 && (x.ocr || x.thumb) ? { ...x, ocr: x.ocr ? x.ocr.slice(0, 1500) : x.ocr, thumb: undefined } : x));
+      // storage full: shorten the label-photo text of the oldest half (the scores stay), then retry
+      list = list.map((x, j) => (j > list.length / 2 && x.ocr ? { ...x, ocr: x.ocr.slice(0, 1500) } : x));
       if (i === 2) list = list.slice(0, Math.ceil(list.length / 2));
     }
   }
 }
+// bf: 1 = saved by the current entry format (picture, brand, cancer score) — the backfill below skips it
 const histEntry = (a, extra) => ({ score: a.score, ecs: a.eczemaScore ? a.eczemaScore.score : null, cr: a.cancer ? a.cancer.score : null, type: a.type || 'food', ecz: a.eczema.overall,
-  alg: a.allergens ? E.allergenSummary(a.allergens) : null, ...extra });
+  alg: a.allergens ? E.allergenSummary(a.allergens) : null, bf: 1, ...extra });
+// One-time backfill of entries saved before v1.6 (no picture / brand / cancer score): re-load the product
+// (local product cache first, else the normal lookup chain), re-score it with the current engine, and update
+// the entry IN PLACE (same date, same position). At most 2 lookups at a time. A failed lookup is skipped and
+// NOT marked done, so it is tried again the next time the app opens; photo-only entries are never touched.
+const bfState = { running: false, tried: new Set(), done: 0, failed: 0 };
+window.__backfill = bfState;
+const needsBackfill = (x) => x && x.code && !x.ocr && !x.bf && (!x.img || !('cr' in x) || !x.brand);
+function backfillHistory() {
+  if (bfState.running) return;
+  const queue = histGet().filter((x) => needsBackfill(x) && !bfState.tried.has(x.code)).map((x) => x.code);
+  if (!queue.length) return;
+  bfState.running = true;
+  const worker = async () => {
+    while (queue.length) {
+      const code = queue.shift();
+      bfState.tried.add(code);
+      let res = null;
+      try { res = await lookup(code); } catch { res = null; }
+      if (!res || res.state === 'failed') { bfState.failed++; continue; }   // retried next app open
+      const list = histGet();
+      const i = list.findIndex((x) => x.code === code && !x.ocr);
+      if (i < 0) continue;
+      if (res.state === 'found') {
+        const a = E.analyze(E.inputFromOff(res.product, res.db));
+        list[i] = { ...list[i], ...histEntry(a, { code: list[i].code, name: productName(res.product) || list[i].name, brand: res.product.brands || '', img: E.productThumb(res.product) }), t: list[i].t };
+      } else list[i] = { ...list[i], bf: 1 };   // the databases answered "no such product": nothing to fill, stop asking
+      if (!list[i].img) fillImage(code);         // no database picture: the extra source (off until configured)
+      histWrite(list);
+      bfState.done++;
+      if (!$('home').hidden) renderHistory();
+      if (!$('ranking').hidden) renderRankList();
+      await new Promise((r) => setTimeout(r, 250));   // gentle on Open Food Facts
+    }
+  };
+  Promise.all([worker(), worker()]).finally(() => { bfState.running = false; });
+}
 // ⚠️ chip in a list row: red = one of MY allergens is in it, amber = may contain / can't confirm
 function algChip(x) {
   const prof = algGet();
@@ -161,7 +234,7 @@ function algChip(x) {
 const TYPE_ICON = { food: '🍎', cosmetic: '🧴', household: '🧽' };
 // list-row picture: product photo (lazy) or the photo the user took; a broken / missing picture falls back to the emoji
 const rowThumb = (x) => {
-  const src = x.thumb || x.img;
+  const src = x.img;   // database picture only (never the user's own photo); none -> category emoji
   return `<span class="hist-thumb" data-emoji="${TYPE_ICON[x.type || 'food']}">${src ? `<img src="${h(src)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : TYPE_ICON[x.type || 'food']}</span>`;
 };
 function wireThumbs(root) {
@@ -180,13 +253,15 @@ function histRow(x, i) {
     <span class="mini-lab">${h(t('scoreCancerShort'))}</span>${mini(x.cr === undefined ? null : x.cr, t('scoreCancer'))}</span>
   </button></li>`;
 }
-function openHist(x, push) { if (x.ocr) showPhotoResult(x.ocr, { push, type: x.type, thumb: x.thumb }); else openBarcode(x.code, '', { push }); }
+function openHist(x, push) { if (x.ocr) showPhotoResult(x.ocr, { push, type: x.type, barcode: x.bcode || '' }); else openBarcode(x.code, '', { push }); }
 function renderHistory() {
   const list = histGet();
   $('histList').innerHTML = list.length ? list.slice(0, 8).map(histRow).join('') : `<li class="empty">${h(t('noHistory'))}</li>`;
   $('histList').querySelectorAll('.hist-item').forEach((b) => { b.onclick = () => openHist(histGet()[Number(b.dataset.i)]); });
   wireThumbs($('histList'));
   $('rankBtn').hidden = !list.length;
+  TR.renderHomeBar();
+  backfillHistory();
 }
 $('clearHist').onclick = () => { localStorage.removeItem('fs_hist'); renderHistory(); };
 
@@ -194,10 +269,10 @@ $('clearHist').onclick = () => { localStorage.removeItem('fs_hist'); renderHisto
 const rk = { q: '', filter: 'all', sort: 'score', dir: 'best' };
 function showRanking() {
   current = null;
-  $('home').hidden = true; $('result').hidden = true; $('allergies').hidden = true; $('ranking').hidden = false; $('scanNext').hidden = true;
+  showOnly('ranking');
   renderRanking();
-  window.scrollTo(0, 0);
 }
+SCREENS.ranking = showRanking;
 const seg = (group, opts, active) => `<div class="seg" role="group" data-group="${group}">${opts.map(([v, k]) => `<button type="button" class="seg-opt${v === active ? ' active' : ''}" data-v="${v}" aria-pressed="${v === active}">${h(t(k))}</button>`).join('')}</div>`;
 function renderRanking() {
   $('ranking').innerHTML = `<button type="button" class="link back" id="rkBack">${h(t('back'))}</button>
@@ -234,6 +309,7 @@ function renderRankList() {
   $('rkList').innerHTML = items.length ? items.map((x) => histRow(x, x.i)).join('') : `<li class="empty">${h(t('rkEmpty'))}</li>`;
   $('rkList').querySelectorAll('.hist-item').forEach((b) => { b.onclick = () => openHist(histGet()[Number(b.dataset.i)], true); });
   wireThumbs($('rkList'));
+  backfillHistory();
 }
 $('rankBtn').onclick = () => { navTo('ranking', true); showRanking(); };
 
@@ -253,6 +329,7 @@ async function openBarcode(raw, format = '', opts = {}) {
   }
   current.push = !!opts.push;
   window.__lastResult = current;   // for automated checks
+  if ((res.state === 'found' && !E.productThumb(res.product)) || res.state === 'notfound') fillImage(current.code);
   renderCurrent();
   navTo('result', opts.push);
   showResultView();
@@ -271,7 +348,7 @@ function renderCurrent() {
   else if (c.kind === 'photo' && c.outcome === 'unreadable') html = back + renderUnreadable(c);
   else if (c.kind === 'photo') html = back + renderAnalysis(c.analysis, { photo: c });
   else if (c.kind === 'notfound') {
-    html = back + `<section class="card msg" id="notFoundCard"><h2>${h(t('notFound'))}</h2><p>${h(t('notFoundHelp'))}</p>
+    html = back + `<section class="card msg" id="notFoundCard">${c.fallbackImg ? `<img src="${h(c.fallbackImg)}" alt="" class="prod-img" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}<h2>${h(t('notFound'))}</h2><p>${h(t('notFoundHelp'))}</p>
       ${photoActions()}${renderPrices({ code: c.code }, true)}
       <p class="muted small">${h(t('barcode'))}: ${h(c.code)} · ${h(t('tried'))}: ${h(c.tried.join(', '))}</p></section>`;
   } else if (c.kind === 'failed') {
@@ -279,6 +356,7 @@ function renderCurrent() {
       <p class="muted">${h(t('barcode'))}: ${h(c.code)}</p><button type="button" class="big primary" id="retryBtn">${h(t('retry'))}</button></section>`;
   }
   $('result').innerHTML = html;
+  TR.wireAte();
   $('backBtn').onclick = goHome;
   $('algGear').onclick = openAllergies;
   const ab = $('algBannerEdit'); if (ab) ab.onclick = openAllergies;
@@ -299,10 +377,15 @@ const photoActions = (id = '', key = 'photoIngredients') => `<button type="butto
 const ALG_KEY = 'fs_allergies';
 function algGet() { try { const v = JSON.parse(localStorage.getItem(ALG_KEY) || '[]'); return Array.isArray(v) ? v.filter((id) => E.ALLERGEN_BY_ID[id]) : []; } catch { return []; } }
 function algSet(ids) { localStorage.setItem(ALG_KEY, JSON.stringify([...new Set(ids)])); }
+// header badge "⚠️ 2" (hidden when no allergies are set) -> opens My allergies directly
 function renderAlgHome() {
   const n = algGet().length;
-  $('algBtn').textContent = n ? t('algHomeN', { n }) : t('algHomeNone');
-  $('algBtn').classList.toggle('set', n > 0);
+  $('algBadge').hidden = !n;
+  $('algBadge').textContent = `⚠️ ${n}`;
+  $('algBadge').setAttribute('aria-label', t('algBadgeLabel', { n }));
+  $('algBadge').title = t('algBadgeLabel', { n });
+  $('settingsBtn').setAttribute('aria-label', t('settings'));
+  $('settingsBtn').title = t('settings');
 }
 const algItem = (x) => `${h(L(x.name))}${x.tagOnly ? '' : ` <span class="alg-what">(${x.matched.slice(0, 3).map(h).join(', ')})</span>`}`;
 // The banner at the very top of every result. Never says "safe": "none found" always points to the package.
@@ -329,10 +412,10 @@ function allergyBanner(a) {
 }
 function openAllergies() { navTo('allergies', true); showAllergies(); }
 function showAllergies() {
-  $('home').hidden = true; $('result').hidden = true; $('ranking').hidden = true; $('allergies').hidden = false; $('scanNext').hidden = true;
+  showOnly('allergies');
   renderAllergies();
-  window.scrollTo(0, 0);
 }
+SCREENS.allergies = showAllergies;
 let algQuery = '';
 function renderAllergies() {
   const prof = algGet();
@@ -367,7 +450,32 @@ function renderAllergies() {
   $('algClear').onclick = () => { algSet([]); renderAllergies(); };
   count(); filter();
 }
-$('algBtn').onclick = openAllergies;
+$('algBadge').onclick = openAllergies;
+
+// ------------------------------------------------------------------ SETTINGS (gear in the header)
+// units: 'us' (lb, ft+in, oz, fl oz) or 'metric' (kg, cm, g, ml). Stored on this phone only.
+const unitsGet = () => (localStorage.getItem('fs_units') === 'metric' ? 'metric' : 'us');
+function unitsSet(u) { localStorage.setItem('fs_units', u === 'metric' ? 'metric' : 'us'); }
+const SETTINGS_ROWS = [];   // rows other screens add: {id, icon, key, sub(), open}
+function openSettings() { if (navState() === 'settings') return; navTo('settings', true); showSettings(); }
+function showSettings() { showOnly('settings'); renderSettings(); }
+SCREENS.settings = showSettings;
+function renderSettings() {
+  const n = algGet().length;
+  const row = (id, icon, label, sub) => `<button type="button" class="set-row" id="${id}"><span class="set-ico">${icon}</span><span class="set-text"><b>${h(label)}</b>${sub ? `<small>${h(sub)}</small>` : ''}</span><span class="set-go">›</span></button>`;
+  $('settings').innerHTML = `<button type="button" class="link back" id="setBack">${h(t('back'))}</button>
+    <h2 class="rk-title">⚙ ${h(t('settings'))}</h2>
+    ${row('setAlg', '⚠️', t('algTitle'), n ? t('algSetN', { n }) : t('algSetNone'))}
+    ${SETTINGS_ROWS.map((r) => row(r.id, r.icon, t(r.key), r.sub ? r.sub() : '')).join('')}
+    <h3 class="set-h">${h(t('unitsHead'))}</h3>
+    ${seg('units', [['us', 'unitsUs'], ['metric', 'unitsMetric']], unitsGet())}
+    <p class="muted small">${h(t('unitsNote'))}</p>`;
+  $('setBack').onclick = goHome;
+  $('setAlg').onclick = openAllergies;
+  SETTINGS_ROWS.forEach((r) => { $(r.id).onclick = r.open; });
+  $('settings').querySelectorAll('.seg[data-group=units] .seg-opt').forEach((b) => { b.onclick = () => { unitsSet(b.dataset.v); renderSettings(); TR.onRender(); }; });
+}
+$('settingsBtn').onclick = openSettings;
 
 // "Compare prices": plain https store-search links, opened only when tapped (nothing is fetched or sent)
 function renderPrices(prod, inline = false) {
@@ -429,7 +537,7 @@ function renderAnalysis(a, { product, code, photo, db }) {
   if ((a.type || 'food') !== 'food') return renderNonFood(a, { product, code, photo, db });
   const parts = a.parts;
   const name = product ? productName(product) : t('photoName');
-  const img = product ? E.productPhoto(product) : (photo && photo.thumb) || '';
+  const img = (product && E.productPhoto(product)) || (current && current.fallbackImg) || '';
   let out = `<section class="card score-card">`;
   out += `<div class="prod">${img ? `<img src="${h(img)}" alt="" class="prod-img" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
     <div class="prod-text"><div class="prod-name" id="prodName">${h(name || code)}</div>${product && product.brands ? `<div class="prod-brand">${h(product.brands)}</div>` : ''}
@@ -452,6 +560,7 @@ function renderAnalysis(a, { product, code, photo, db }) {
     <tr><td>${h(t('processing'))}</td><td>${parts.processing.points == null ? h(t('unknown')) : `${parts.processing.points}/10 · NOVA ${parts.processing.nova}${parts.processing.estimated ? ` (${h(t('estimate'))})` : ''}`}</td></tr>
     ${a.capped ? `<tr><td colspan="2" class="r-bad">${h(t('capped'))}</td></tr>` : ''}</table></details>`;
   out += `</section>`;
+  out += TR.ateCard({ key: current, name: name || (photo ? t('photoName') : code), code: code || (photo && photo.barcode) || '', product, photo });
   out += renderPrices(product ? { name, brand: product.brands, code } : { code: photo && photo.barcode });
 
   out += renderEczema(a.eczema, a.eczemaScore, 'food');
@@ -465,7 +574,7 @@ function renderAnalysis(a, { product, code, photo, db }) {
 // cosmetics / personal care / household: harmful-ingredients score instead of the nutrition score
 function renderNonFood(a, { product, code, photo, db }) {
   const name = product ? productName(product) : t('photoName');
-  const img = product ? E.productPhoto(product) : (photo && photo.thumb) || '';
+  const img = (product && E.productPhoto(product)) || (current && current.fallbackImg) || '';
   const dbName = db ? (E.DATABASES.find((d) => d.id === db) || {}).name : '';
   let out = `<section class="card score-card">`;
   out += `<div class="prod">${img ? `<img src="${h(img)}" alt="" class="prod-img" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}
@@ -719,6 +828,7 @@ async function onPhoto(file) {
     const fp = { state: 'reading', pct: 0, read: null };
     current = { kind: 'off', product: res.product, code: res.code, db: res.db, analysis, cached: res.cached, fromPhoto: fp };
     histAdd(histEntry(analysis, { code: res.code, name: productName(res.product), brand: res.product.brands || '', img: E.productThumb(res.product) }));
+    if (!E.productThumb(res.product)) fillImage(res.code);
     window.__lastResult = current;
     busy(false);
     renderCurrent(); navTo('result'); showResultView();
@@ -741,29 +851,23 @@ async function onPhoto(file) {
     const read = await readLabel(src, step);
     window.__photoTimings = { ...T, ...read.timings, totalMs: Math.round(performance.now() - T.start), probes: read.probes, rotation: read.rotation, quality: read.quality };
     busy(false);
-    showPhotoResult(read.text, { rotation: read.rotation, barcode: bc && bc.text, barcodeState: res && res.state, thumb: makeThumb(src, read.rotation) });
+    showPhotoResult(read.text, { rotation: read.rotation, barcode: bc && bc.text, barcodeState: res && res.state });
   } catch (err) {
     console.warn('OCR failed', err);
     busy(false);
     showPhotoResult('', { error: 'ocr', barcode: bc && bc.text, barcodeState: res && res.state });
   }
 }
-// small JPEG data URL for "My products" (kept under ~15 KB; the full photo is never stored)
-function makeThumb(src, deg = 0) {
-  try {
-    const cv = drawRotated(src, deg, 120);
-    for (const q of [0.7, 0.5, 0.35]) { const u = cv.toDataURL('image/jpeg', q); if (u.length < 15000) return u; }
-  } catch (err) { console.warn('thumb', err); }
-  return '';
-}
 function showPhotoResult(text, meta = {}) {
   const { input, facts, label, per100, outcome } = E.inputFromOcr(text);
   const analysis = E.analyze(input);
-  current = { kind: 'photo', text, facts, label, per100, analysis, outcome, rotation: meta.rotation || 0, barcode: meta.barcode || '', barcodeState: meta.barcodeState || '', push: !!meta.push, thumb: meta.thumb || '' };
+  current = { kind: 'photo', text, facts, label, per100, analysis, outcome, rotation: meta.rotation || 0, barcode: meta.barcode || '', barcodeState: meta.barcodeState || '', push: !!meta.push };
   window.__lastResult = current;
   if (outcome !== 'unreadable') {
-    histAdd(histEntry(analysis, { code: '', name: `📷 ${label.ingredients.slice(0, 60) || t('photoName')}`, ocr: text.slice(0, 4000), thumb: meta.thumb || '' }));
+    // a barcode seen in the photo (even one no database knows) is kept so the row can get that product's picture
+    histAdd(histEntry(analysis, { code: '', bcode: meta.barcode || '', name: `📷 ${label.ingredients.slice(0, 60) || t('photoName')}`, ocr: text.slice(0, 4000) }));
   }
+  if (meta.barcode) fillImage(meta.barcode);
   renderCurrent();
   navTo('result', meta.push);
   showResultView();
@@ -1013,5 +1117,12 @@ if ('serviceWorker' in navigator) {
   let reloaded = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloaded && $('updateBar').hidden === false) { reloaded = true; location.reload(); } });
 }
+
+// ------------------------------------------------------------------ calorie tracker + weight goal (screens in tracker.js, science in diet.js)
+const TR = initTracker({
+  $, t, L, h, seg, lang: () => lang, units: unitsGet, setUnits: unitsSet, showOnly, navTo, goHome, SCREENS, SETTINGS_ROWS, histGet, algGet,
+  productFor: (code) => { for (const d of E.DATABASES) { const p = cacheGet(code, d.id, true); if (p) return p; } return null; },
+  startScanner: () => startScanner({ push: true }),
+});
 
 applyLang();
