@@ -367,3 +367,59 @@ td.r-bad { color: var(--red); font-weight: 700; }
 .zip-form { display: flex; gap: 8px; }
 .zip-form input { font-size: 22px; padding: 12px; width: 7em; border: 2px solid #c8ccc9; border-radius: 14px; }
 .src-note { font-weight: 600; }
+/* Weekly meal plan (mealscreen.js) — big tap targets, phone first */
+.mp-home { min-height: 64px; margin: 6px 0; }
+.mp-home .set-text b { font-size: 19px; }
+.mp-goal-line { margin: 0 0 4px; font-size: 19px; }
+.mp-mid { min-height: 60px; font-size: 19px; margin: 8px 0 0; }
+.mp-buds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.mp-bud { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 76px; border: 3px solid #d5dbd7; border-radius: 16px; background: #fff; font-size: 17px; color: #202124; cursor: pointer; padding: 6px 4px; }
+.mp-bud span { font-size: 20px; font-weight: 800; color: #146c33; }
+.mp-bud.active { border-color: var(--green); background: var(--green); color: #fff; }
+.mp-bud.active span { color: #fff; }
+.mp-other { display: flex; align-items: center; gap: 8px; margin: 12px 0 4px; font-size: 18px; font-weight: 700; }
+.mp-other input { width: 130px; min-height: 52px; font-size: 20px; border: 2px solid #c7cdc9; border-radius: 12px; padding: 6px 10px; }
+.mp-allnone { display: flex; gap: 22px; margin: -4px 0 4px; }
+.mp-allnone .link { font-size: 17px; min-height: 44px; }
+.mp-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.mp-grid.one { grid-template-columns: 1fr; }
+.mp-opt { min-width: 0; overflow-wrap: break-word; hyphens: auto; display: flex; align-items: center; gap: 6px; min-height: 58px; border: 2px solid #dfe3e0; border-radius: 14px; padding: 8px 6px; background: #fff; font-size: 16px; line-height: 1.25; cursor: pointer; }
+.mp-opt.on { border-color: var(--green); background: #e9f6ee; }
+.mp-opt input { width: 26px; height: 26px; flex: none; accent-color: var(--green); }
+.mp-ico { font-size: 22px; flex: none; }
+.mp-alg { font-size: 16px; margin: 16px 0 0; }
+.mp-link { font-size: 17px; min-height: 44px; }
+.mp-cost { font-size: 18px; margin: 8px 0; }
+.mp-cost.ok b:last-child { color: #146c33; }
+.mp-cost.over b { color: var(--red); }
+.mp-sug .set-text b { font-size: 19px; }
+.mp-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin: 14px 0 6px; }
+.mp-day { display: flex; flex-direction: column; align-items: center; min-height: 70px; padding: 4px 0; border: 2px solid #d5dbd7; border-radius: 12px; background: #fff; font-size: 13px; line-height: 1.2; color: #202124; cursor: pointer; }
+.mp-day b { font-size: 14px; }
+.mp-day span { font-size: 18px; font-weight: 800; }
+.mp-day small { color: var(--grey); }
+.mp-day.today { border-color: var(--green); }
+.mp-day.active { background: var(--green); border-color: var(--green); color: #fff; }
+.mp-day.active small { color: #e8f5ec; }
+.mp-daycard h2 { margin-bottom: 4px; }
+.mp-prog { display: block; font-weight: 800; color: #146c33; margin: 4px 0 8px; }
+.mp-task { border-top: 1px solid #eef0ef; padding: 6px 0 8px; }
+.mp-task-head { display: flex; align-items: center; gap: 12px; min-height: 58px; cursor: pointer; }
+.mp-task-head input.mp-cb { width: 34px; height: 34px; flex: none; accent-color: var(--green); }
+.mp-task-title { display: flex; flex-direction: column; min-width: 0; }
+.mp-task-title b { font-size: 20px; overflow-wrap: anywhere; }
+.mp-task-title small { font-size: 15px; color: var(--grey); }
+.mp-task.done .mp-task-title b { color: #146c33; text-decoration: line-through; }
+.mp-task-detail { padding-left: 46px; }
+.mp-task-detail small { display: block; font-size: 15px; color: var(--grey); margin-top: 3px; }
+.mp-items { list-style: none; padding: 0; margin: 0; }
+.mp-items li { display: flex; flex-direction: column; padding: 4px 0; }
+.mp-food { font-weight: 700; font-size: 17px; }
+.mp-amt { font-size: 15px; color: #3c4043; }
+.mp-ex b { display: block; font-size: 17px; }
+.mp-moves { display: block; margin-top: 6px; }
+.mp-moves ul { margin: 4px 0 0; padding-left: 20px; font-size: 16px; }
+.mp-why { background: #f1f7f3; border-radius: 10px; padding: 6px 8px; }
+.mp-shop .mp-task-head { min-height: 52px; }
+.mp-shop .mp-task-title b { font-size: 18px; }
+.mp-total { font-size: 18px; margin: 12px 0 4px; }

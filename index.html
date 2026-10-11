@@ -30,7 +30,7 @@
     if (navigator.serviceWorker) jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); }));
     // also refresh the browser's own short-lived copies, so the reload cannot pick up a mixed set again
     if (window.fetch) ['./', './index.html', './version.js', './sw.js', './css/app.css', './js/app.js', './js/engine.js', './js/i18n.js',
-      './js/diet.js', './js/tracker.js', './js/config.js', './js/prices.js'].forEach(function (u) { jobs.push(fetch(u, { cache: 'reload' }).catch(function () {})); });
+      './js/diet.js', './js/tracker.js', './js/config.js', './js/prices.js', './js/mealplan.js', './js/mealscreen.js'].forEach(function (u) { jobs.push(fetch(u, { cache: 'reload' }).catch(function () {})); });
     Promise.all(jobs).then(go, go);
     function go() { location.reload(); }
   }
@@ -63,6 +63,7 @@
     <input id="photoInput" type="file" accept="image/*" hidden>
   </label>
   <button id="todayBar" type="button" class="today-bar"></button>
+  <button id="mealPlanBtn" type="button" class="set-row mp-home"><span class="set-ico">🛒</span><span class="set-text"><b data-t="mpHome"></b></span><span class="set-go">›</span></button>
   <form id="typeForm" class="type-form" autocomplete="off">
     <input id="codeInput" inputmode="numeric" pattern="[0-9 ]*" maxlength="16" data-ph="typePh">
     <button type="submit" class="go" data-t="go"></button>
@@ -86,6 +87,7 @@
 <main id="today" class="view" hidden></main>
 <main id="weight" class="view" hidden></main>
 <main id="plan" class="view" hidden></main>
+<main id="mealplan" class="view" hidden></main>
 
 <div id="busy" class="busy" hidden><div class="spinner"></div><p id="busyText"></p><p id="busyStep" class="busy-step"></p></div>
 

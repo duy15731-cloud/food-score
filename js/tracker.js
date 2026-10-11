@@ -665,7 +665,7 @@ export function initTracker(ctx) {
   }
 
   return {
-    ateCard, wireAte, renderHomeBar,
+    ateCard, wireAte, renderHomeBar, compute, openProfile,
     resetAte: () => { ate = { key: null }; },
     onRender() {   // language or units changed: redraw whatever tracker screen is showing
       renderHomeBar();

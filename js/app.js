@@ -2,6 +2,7 @@
 import * as E from './engine.js';
 import { STR } from './i18n.js';
 import { initTracker } from './tracker.js';
+import { initMealPlan } from './mealscreen.js';
 import { CONFIG } from './config.js';
 import { mountLivePrices, PRICE_STRINGS, getSavedZip, saveZip, cleanZip } from './prices.js';
 
@@ -41,6 +42,7 @@ function applyLang() {
   if (!$('allergies').hidden) renderAllergies();
   if (!$('settings').hidden) renderSettings();
   TR.onRender();
+  MP.onRender();
   renderAlgHome();
 }
 document.querySelectorAll('.lang-opt').forEach((b) => {
@@ -1172,6 +1174,12 @@ const TR = initTracker({
   productFor: (code) => { for (const d of E.DATABASES) { const p = cacheGet(code, d.id, true); if (p) return p; } return null; },
   startScanner: () => startScanner({ push: true }),
 });
+// weekly meal plan (screen in mealscreen.js, planning in mealplan.js; calories from the saved goal via TR.compute)
+const MP = initMealPlan({
+  $, t, L, h, lang: () => lang, showOnly, navTo, goHome, SCREENS, SETTINGS_ROWS, algGet, openAllergies,
+  compute: TR.compute, openProfile: TR.openProfile, allergenName: (id) => (E.ALLERGEN_BY_ID[id] ? L(E.ALLERGEN_BY_ID[id].name) : ''),
+});
+$('mealPlanBtn').onclick = MP.open;
 
 applyLang();
 

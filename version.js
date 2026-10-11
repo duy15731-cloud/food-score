@@ -1,3 +1,3 @@
 // THE ONE place the version lives. Used by the page footer AND as the service-worker cache name,
 // so bumping it here makes every installed phone pick up the new build ("new version available").
-self.APP_VERSION = '1.9.1-2026-10-10';
+self.APP_VERSION = '1.10.0-2026-10-10';
