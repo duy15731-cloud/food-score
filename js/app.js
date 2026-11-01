@@ -3,6 +3,7 @@ import * as E from './engine.js';
 import { STR } from './i18n.js';
 import { initTracker } from './tracker.js';
 import { initMealPlan } from './mealscreen.js';
+import { initDeals } from './dealscreen.js';
 import { CONFIG } from './config.js';
 import { mountLivePrices, PRICE_STRINGS, getSavedZip, saveZip, cleanZip } from './prices.js';
 
@@ -43,6 +44,7 @@ function applyLang() {
   if (!$('settings').hidden) renderSettings();
   TR.onRender();
   MP.onRender();
+  DF.onRender();
   renderAlgHome();
 }
 document.querySelectorAll('.lang-opt').forEach((b) => {
@@ -1180,6 +1182,9 @@ const MP = initMealPlan({
   compute: TR.compute, openProfile: TR.openProfile, allergenName: (id) => (E.ALLERGEN_BY_ID[id] ? L(E.ALLERGEN_BY_ID[id].name) : ''),
 });
 $('mealPlanBtn').onclick = MP.open;
+// cheapest price (screen in dealscreen.js; the search itself runs on the family's computer, paired once by link)
+const DF = initDeals({ $, t, L, h, lang: () => lang, showOnly, navTo, goHome, SCREENS, SETTINGS_ROWS });
+$('dealsBtn').onclick = DF.open;
 
 applyLang();
 
