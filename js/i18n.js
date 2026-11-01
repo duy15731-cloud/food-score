@@ -474,6 +474,8 @@ export const STR = {
   dfPasteHint: { vi: 'Ứng dụng đã cài trên iPhone? Trên trang Deal Finder bấm “📋 Copy connect code”, rồi dán vào đây:', en: 'Using the app installed on an iPhone? On the Deal Finder page tap “📋 Copy connect code”, then paste it here:' },
   dfPastePh: { vi: 'Dán mã kết nối…', en: 'Paste the connect code…' },
   dfConnect: { vi: 'Kết nối', en: 'Connect' },
+  dfLnaDenied: { vi: 'Chrome đang chặn ứng dụng nói chuyện với máy tính ở nhà. Bấm biểu tượng ổ khoá cạnh địa chỉ trang → Cài đặt trang web → “Truy cập mạng cục bộ” (Local network access) → Cho phép, rồi thử lại.', en: 'Chrome is blocking the app from talking to the home computer. Tap the lock icon next to the address → Site settings → Local network access → Allow, then try again.' },
+  dfOfflineAsk: { vi: 'Không kết nối được với máy tính ở nhà. Hãy bật Tailscale trên điện thoại này và để máy tính mở. Nếu Chrome hỏi có cho phép truy cập thiết bị trong mạng cục bộ không, hãy bấm Cho phép (Allow). Rồi thử lại.', en: 'Can\u2019t reach the home computer. Turn on Tailscale on this phone and make sure the computer is on. If Chrome asks to allow access to devices on your local network, tap Allow. Then try again.' },
   dfPairing: { vi: 'Đang kết nối với máy tính ở nhà…', en: 'Connecting to the home computer…' },
   dfPaired: { vi: '✓ Đã kết nối với máy tính ở nhà.', en: '✓ Connected to the home computer.' },
   dfPairFail: { vi: 'Không kết nối được. Hãy bật Tailscale trên điện thoại, rồi bấm lại liên kết “Add to Food Score”.', en: 'Couldn\u2019t connect. Turn on Tailscale on this phone, then tap the “Add to Food Score” link again.' },

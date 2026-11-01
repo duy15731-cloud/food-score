@@ -53,12 +53,28 @@ export function initDeals(ctx) {
     try {
       r = await fetch(root + path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ac.signal }
         : { signal: ac.signal, cache: 'no-store' });
-    } catch { throw { kind: 'offline' }; } finally { clearTimeout(kill); }
+    } catch {
+      const lna = await lnaState();
+      throw { kind: lna === 'denied' ? 'lna' : lna === 'prompt' ? 'offline_ask' : 'offline' };
+    } finally { clearTimeout(kill); }
     let j = null;
     try { j = await r.json(); } catch { /* not JSON */ }
     if (!r.ok || !j) throw { kind: r.status === 404 ? 'gone' : 'http', msg: (j && j.error) || String(r.status) };
     return j;
   }
+  // Chrome asks once before a website may reach a device on the home network (the computer's Tailscale address
+  // counts). A "Block" answer fails exactly like "computer off", so ask Chrome which it was - or the screen would send
+  // the family chasing Tailscale. 'denied' = blocked; 'prompt' = not answered yet (or Tailscale off, so it never got
+  // that far); browsers without this permission (iPhone) throw -> '' = plain "can't reach".
+  async function lnaState() {      // Chrome has used two names for it; either one may be the one that applies
+    const states = [];
+    for (const name of ['local-network', 'local-network-access']) {
+      try { states.push((await navigator.permissions.query({ name })).state); } catch { /* this browser lacks it */ }
+    }
+    return states.includes('denied') ? 'denied' : states.includes('prompt') ? 'prompt' : '';
+  }
+  const FAIL_KEY = { lna: 'dfLnaDenied', offline_ask: 'dfOfflineAsk', offline: 'dfOffline' };
+  const failText = (e) => t(FAIL_KEY[e.kind] || 'dfFailed', { msg: e.msg || '' });
   async function health(root) {
     const j = await api('/health', null, 8000, root);
     if (!j.ok || j.app !== 'deal-finder') throw { kind: 'http', msg: 'not Deal Finder' };
@@ -90,7 +106,7 @@ export function initDeals(ctx) {
     if (visible()) render();
     return (root ? health(root).then(() => { ui.pairMsg = write(K.url, root) ? 'dfPaired' : 'dfPairFail'; })
       : Promise.reject({ kind: 'bad' }))
-      .catch(() => { ui.pairMsg = 'dfPairFail'; })
+      .catch((e) => { ui.pairMsg = e && e.kind === 'lna' ? 'dfLnaDenied' : e && e.kind === 'offline_ask' ? 'dfOfflineAsk' : 'dfPairFail'; })
       .then(() => { if (visible()) render(); });
   }
   setTimeout(tryPair, 0);                                   // after the app has finished starting (language, home screen)
@@ -114,7 +130,7 @@ export function initDeals(ctx) {
       if (j.status === 'running' && visible()) timer = setTimeout(poll, 2000);
     } catch (e) {
       if (e.kind === 'gone') { localStorage.removeItem(K.last); ui = { ...ui, phase: 'error', job: null, err: t('dfExpired'), retry: 'search' }; }
-      else { ui.phase = 'error'; ui.retry = 'poll'; ui.err = t(e.kind === 'offline' ? 'dfOffline' : 'dfFailed', { msg: e.msg || '' }); }
+      else { ui.phase = 'error'; ui.retry = 'poll'; ui.err = failText(e); }
     }
     inflight = false;
     if (!visible()) return;
@@ -142,7 +158,7 @@ export function initDeals(ctx) {
       poll();
     } catch (e) {
       ui.phase = 'error'; ui.retry = 'search';
-      ui.err = t(e.kind === 'offline' ? 'dfOffline' : 'dfFailed', { msg: e.msg || '' });
+      ui.err = failText(e);
       render();
     }
   }
@@ -212,7 +228,7 @@ export function initDeals(ctx) {
   }
   function render() {
     const top = `<button type="button" class="link back" id="dfBack">${h(t('camBack'))}</button><h2 class="df-title">${h(t('dfTitle'))}</h2>`;
-    const pair = ui.pairMsg ? `<p class="df-pair ${ui.pairMsg === 'dfPairFail' ? 'bad' : ''}" id="dfPairMsg">${h(t(ui.pairMsg))}</p>` : '';
+    const pair = ui.pairMsg ? `<p class="df-pair ${['dfPairFail', 'dfLnaDenied', 'dfOfflineAsk'].includes(ui.pairMsg) ? 'bad' : ''}" id="dfPairMsg">${h(t(ui.pairMsg))}</p>` : '';
     if (!base()) {
       $('deals').innerHTML = `${top}${pair}<section class="card" id="dfNotPaired"><p>${h(t('dfNotPaired'))}</p><ol class="df-steps"><li>${h(t('dfStep1'))}</li><li>${h(t('dfStep2'))}</li><li>${h(t('dfStep3'))}</li></ol>
         <p class="muted small">${h(t('dfPasteHint'))}</p>
